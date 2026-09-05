@@ -17,18 +17,16 @@ class StubService:
         return {"status": "ok", "action": "status"}
 
     async def screen(self, umo=""):
-        return {
-            "status": "ok",
-            "action": "screen",
-            "nodes": [],
-            "screenshot_path": "/tmp/shot.png",
-        }
+        payload = {"status": "ok", "action": "screen", "nodes": []}
+        if self.vision:
+            # 契约镜像 service：视觉开启时 service 预编码 base64 与 mime
+            import base64
 
-    def screen_vision_enabled(self):
-        return self.vision
-
-    def load_screenshot(self, path):
-        return b"fake-jpeg-bytes"
+            payload["screenshot_data"] = base64.b64encode(b"fake-jpeg-bytes").decode(
+                "ascii"
+            )
+            payload["screenshot_mime"] = "image/jpeg"
+        return payload
 
     async def tap(self, umo, x, y):
         return {"status": "ok", "action": "tap", "xy": [x, y]}
@@ -156,7 +154,8 @@ def test_screen_vision_enabled_returns_mcp_image():
     text_part, image_part = result.content
     payload = json.loads(text_part.text)
     assert payload["status"] == "ok"
-    assert "screenshot_path" not in text_part.text
+    assert "screenshot_data" not in text_part.text  # base64 不重复出现在文本中
+    assert "screenshot_mime" not in text_part.text
     assert image_part.mimeType == "image/jpeg"
     assert base64.b64decode(image_part.data) == b"fake-jpeg-bytes"
 

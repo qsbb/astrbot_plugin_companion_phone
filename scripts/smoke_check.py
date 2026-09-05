@@ -73,7 +73,14 @@ def _import_deps():
 @step("第三方依赖可导入（uiautomator2 / adbutils）")
 def check_deps(args):
     u2, adbutils = _import_deps()
-    return f"uiautomator2 {getattr(u2, '__version__', '?')} / adbutils {getattr(adbutils, '__version__', '?')}"
+    detail = f"uiautomator2 {getattr(u2, '__version__', '?')} / adbutils {getattr(adbutils, '__version__', '?')}"
+    try:
+        import PIL
+
+        detail += f" / Pillow {PIL.__version__}"
+    except ImportError:
+        detail += " / Pillow 缺失（SCREEN_VISION 视觉兜底将回退原始 PNG）"
+    return detail
 
 
 def _load_config(args) -> dict:

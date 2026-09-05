@@ -2,6 +2,14 @@
 
 本文件记录 astrbot_plugin_companion_phone（凝心溯溪-通）的变更。metadata.yaml 的 `version` 是版本唯一事实源。
 
+## 0.0.4 - 2026-09-06
+
+### 新增
+
+- R2 视觉兜底：新增 `SCREEN_VISION` 配置（默认关闭）。开启后 `screen` 把截图压缩为宽 ≤720px 的 JPEG（Pillow，压缩在 to_thread 内不阻塞事件循环；PIL 不可用时回退原始字节并按魔数嗅探 mime），以 MCP `CallToolResult` 图像内容与控件树文本一并回传多模态模型；关闭时行为与 0.0.3 完全一致，截图路径零泄漏。
+- `requirements.txt` 显式声明 Pillow（截图压缩；uiautomator2 的传递依赖）。
+- 已知宿主要求：视觉回传依赖 AstrBot 工具结果遍历全部内容块——旧版本宿主上自动降级为纯文本（schema 描述已注明）。
+
 ## 0.0.3（2026-09-06）
 
 第二轮 3 份盲测的修复版本。

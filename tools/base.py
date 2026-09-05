@@ -47,7 +47,6 @@ class _ToolMixin:
             return guard
         try:
             payload = await coro_factory()
-            return formatter(payload) if formatter else _json(payload)
         except PhoneError as exc:
             return _json(exc.public_dict(action))
         except (TypeError, ValueError):
@@ -56,6 +55,15 @@ class _ToolMixin:
             )
         except Exception:
             logger.exception("[companion-phone] tool internal error")
+            return _json(
+                PhoneError(E_INTERNAL, "内部错误，请管理员查看日志").public_dict(action)
+            )
+        # formatter 异常单独归一：pydantic ValidationError 是 ValueError 子类，
+        # 混进上面的分支会把组包失败误报成"参数无效"（盲测 I P3-1）
+        try:
+            return formatter(payload) if formatter else _json(payload)
+        except Exception:
+            logger.exception("[companion-phone] tool formatter error")
             return _json(
                 PhoneError(E_INTERNAL, "内部错误，请管理员查看日志").public_dict(action)
             )

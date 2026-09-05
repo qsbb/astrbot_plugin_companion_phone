@@ -30,6 +30,13 @@ from .safety import SafetyGate
 _INPUT_MAX_LENGTH = 500
 
 
+def sniff_image_mime(data: bytes) -> str:
+    """按魔数判型；mime 必须与实际字节一致（P1-1）。"""
+    if data.startswith(b"\xff\xd8"):
+        return "image/jpeg"
+    return "image/png"
+
+
 class PhoneService:
     """业务编排：启停检查 → 会话 → 预算 → 拟人延时 → 设备会话 → 审计。
 
@@ -245,8 +252,12 @@ class PhoneService:
         """R2 视觉兜底开关（SCREEN_VISION，默认关闭）。"""
         return self._cfg().screen_vision
 
-    def load_screenshot(self, path: str | Path) -> bytes | None:
-        """读取并压缩截图（≤720px JPEG；Pillow 不可用时回退原始 PNG）。"""
+    def load_screenshot(self, path: str | Path) -> tuple[bytes, str] | None:
+        """读取并压缩截图；返回 (bytes, mime)。
+
+        压缩失败时回退原始字节并按魔数嗅探 mime——mime 必须与字节一致，
+        否则严格提供方会拒绝整轮请求（第二轮盲测 I P1-1）。
+        """
         try:
             data = Path(path).read_bytes()
         except OSError:
@@ -263,9 +274,9 @@ class PhoneService:
                 img = img.resize((max_w, max(1, int(h * max_w / w))))
             buf = io.BytesIO()
             img.save(buf, "JPEG", quality=70)
-            return buf.getvalue()
+            return buf.getvalue(), "image/jpeg"
         except Exception:
-            return data
+            return data, sniff_image_mime(data)
 
     async def screen(self, umo: str = "") -> dict:
         started = time.monotonic()
@@ -282,7 +293,7 @@ class PhoneService:
             size = await session.screen_size()
             nodes = await session.ui_tree(cfg.ui_tree_max_nodes)
             # 截图存盘供管理员（/phone shot）、审计与 R2 视觉兜底；
-            # 路径由工具层消费，永远不进入模型可见文本
+            # 路径永远不进入模型可见文本
             shot = await self._take_screenshot(session, cfg)
         except PhoneError as exc:
             await self._audit_async("", cfg, "screen", {}, "error", exc.code, started)
@@ -296,14 +307,23 @@ class PhoneService:
             "",
             started,
         )
-        return {
+        payload = {
             "status": "ok",
             "action": "screen",
             "current_app": current,
             "screen_size": size,
             "nodes": nodes,
-            "screenshot_path": str(shot),
         }
+        if cfg.screen_vision:
+            # 压缩在 to_thread 内（P2-3：不阻塞事件循环）；base64 后由工具层组包
+            encoded = await asyncio.to_thread(self.load_screenshot, shot)
+            if encoded is not None:
+                import base64
+
+                data, mime = encoded
+                payload["screenshot_data"] = base64.b64encode(data).decode("ascii")
+                payload["screenshot_mime"] = mime
+        return payload
 
     # ---------- 操作 ----------
     async def tap(self, umo: str, x: int, y: int) -> dict:

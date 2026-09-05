@@ -11,8 +11,22 @@ def test_screen_ok(service):
     assert result["status"] == "ok"
     assert result["screen_size"] == [1080, 2400]
     assert len(result["nodes"]) == 2
-    # 截图存盘，路径为内部字段：由工具层消费（R2 视觉/排障），不进模型文本
-    assert result["screenshot_path"].endswith(".png")
+    # 默认视觉关闭：payload 无图像数据、无内部路径（F-17 回归锚保持）
+    assert "screenshot_data" not in result
+    assert "screenshot_mime" not in result
+    assert "screenshot_path" not in result
+
+
+def test_screen_vision_on_embeds_base64(service):
+    """R2 回归锚：SCREEN_VISION 开启时 payload 携带 base64 图像与 mime。"""
+    service._cfg_provider = lambda: make_cfg(SCREEN_VISION=True)
+    result = asyncio.run(service.screen("u1"))
+    import base64
+
+    data = base64.b64decode(result["screenshot_data"])
+    # FakeSession.screenshot 落盘的是 PNG 魔数假字节 → 回退路径按魔数嗅探
+    assert result["screenshot_mime"] == "image/png"
+    assert data.startswith(b"\x89PNG")
 
 
 def test_tap_blocked_in_high_risk_foreground(service):
@@ -237,3 +251,12 @@ def test_audit_records_error_outcomes(service):
     rec = [r for r in records if r["action"] == "tap"][-1]
     assert rec["outcome"] == "error"
     assert rec["error_code"] == "tap_out_of_bounds"
+
+
+def test_sniff_image_mime():
+    """mime 嗅探回归锚（盲测 I P1-1）：回退路径的 mime 必须与字节一致。"""
+    from astrbot_plugin_companion_phone.service import sniff_image_mime
+
+    assert sniff_image_mime(b"\xff\xd8\xff\xe0rest") == "image/jpeg"
+    assert sniff_image_mime(b"\x89PNG\r\n") == "image/png"
+    assert sniff_image_mime(b"whatever") == "image/png"

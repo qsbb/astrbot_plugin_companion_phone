@@ -59,25 +59,18 @@ class ScreenTool(_ToolMixin, FunctionTool[AstrAgentContext]):
         umo = _umo(context)
 
         def formatter(payload: dict) -> ToolExecResult:
-            path = payload.pop("screenshot_path", None)
-            if not path or not self.service.screen_vision_enabled():
-                return _json(payload)  # 路径永不进入模型可见文本
-            data = self.service.load_screenshot(path)
+            # service 已完成压缩与 base64（to_thread 内）；此处只组包
+            data = payload.pop("screenshot_data", None)
+            mime = payload.pop("screenshot_mime", "image/png")
             if not data:
-                return _json(payload)
+                return _json(payload)  # 视觉关闭或压缩失败：纯文本，路径零泄漏
             try:
-                import base64
-
                 from mcp.types import CallToolResult, ImageContent, TextContent
 
                 return CallToolResult(
                     content=[
                         TextContent(type="text", text=_json(payload)),
-                        ImageContent(
-                            type="image",
-                            data=base64.b64encode(data).decode("ascii"),
-                            mimeType="image/jpeg",
-                        ),
+                        ImageContent(type="image", data=data, mimeType=mime),
                     ]
                 )
             except ImportError:

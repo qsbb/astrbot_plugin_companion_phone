@@ -178,7 +178,7 @@
 
   "SCREEN_VISION": {
     "type": "bool",
-    "description": "视觉兜底：screen 工具把截图（压缩后 ≤720px JPEG）以图像内容回传给多模态模型；显著增加 token 成本，默认关闭",
+    "description": "视觉兜底：screen 工具把截图（宽压缩至 ≤720px，高度等比）以图像内容回传给多模态模型；显著增加 token 成本，默认关闭。需要工具结果支持多内容块的 AstrBot 版本——旧版本上自动降级为纯文本",
     "default": false
   }
 }
