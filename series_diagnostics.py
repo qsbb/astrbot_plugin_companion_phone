@@ -94,7 +94,7 @@ def diagnostic_event(
 
 def diagnostic_events(after_seq: int = 0, limit: int = 200) -> dict[str, Any]:
     """游标续读；stream_id 变化表示插件重启，调用方必须重置游标。"""
-    limit = max(1, min(int(limit), _MAX_EVENTS))
+    limit = max(0, min(int(limit), _MAX_EVENTS))  # limit=0 返回空（与审计语义一致）
     with _lock:
         selected = [e for e in _events if e["seq"] > after_seq][:limit]
         next_seq = selected[-1]["seq"] if selected else after_seq

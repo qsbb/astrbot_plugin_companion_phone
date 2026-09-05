@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pytest
 
 import astrbot_plugin_companion_phone.service as service_mod
 from astrbot_plugin_companion_phone.backend.base import BackendState
@@ -113,9 +112,3 @@ def make_service(tmp_path, cfg=None) -> PhoneService:
     svc = PhoneService(lambda: cfg or make_cfg(), tmp_path, session_factory=factory)
     svc._fake = holder
     return svc
-
-
-@pytest.fixture
-def service(tmp_path, monkeypatch):
-    install_fake_backend(monkeypatch)
-    return make_service(tmp_path)

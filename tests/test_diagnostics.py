@@ -102,3 +102,12 @@ def test_clear_keeps_seq_monotonic():
     result2 = sd.diagnostic_events(last_seq, 200)
     assert len(result2["events"]) == 1  # 旧游标依然能读到清空后的新事件
     assert result2["stream_id"]  # stream_id 保持，表示进程未重启
+
+
+def test_limit_zero_returns_empty():
+    """回归锚（F P3-13）：limit=0 返回空，而非被 max(1,...) 顶成 1 条。"""
+    sd.diagnostic_clear()
+    sd.diagnostic_event("x", "y")
+    result = sd.diagnostic_events(0, 0)
+    assert result["events"] == []
+    assert result["next_seq"] == 0
