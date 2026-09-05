@@ -16,7 +16,7 @@ _BOOT_POLL_INTERVAL = 5.0
 class RedroidBackend(DeviceBackend):
     """通过 docker CLI 管理 Redroid 容器，产出 127.0.0.1:<port> 的 ADB serial。
 
-    docker 调用统一走 asyncio.create_subprocess_exec（无额外依赖、天然异步）。
+    docker 调用统一走 asyncio.create_subprocess_exec（无额外依赖、天然异步、无 shell 注入面）。
     """
 
     def __init__(self, cfg) -> None:
@@ -26,18 +26,22 @@ class RedroidBackend(DeviceBackend):
     async def _docker(
         self, *args: str, timeout: float = _DOCKER_TIMEOUT_SECONDS
     ) -> tuple[int, str, str]:
-        proc = await asyncio.create_subprocess_exec(
-            "docker",
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "docker",
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except (FileNotFoundError, OSError) as exc:
+            # docker 二进制不存在是 E_DOCKER_MISSING 的本义，不能裸抛 FileNotFoundError
+            raise BackendError(E_DOCKER_MISSING, f"docker 不可用：{exc}") from exc
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout)
         except asyncio.TimeoutError:
             proc.kill()
             raise BackendError(
-                E_DOCKER_MISSING, f"docker 命令超时：docker {' '.join(args[:3])}"
+                E_CONTAINER_FAILED, f"docker 命令超时：docker {' '.join(args[:3])}"
             ) from None
         return (
             proc.returncode or 0,
@@ -61,10 +65,8 @@ class RedroidBackend(DeviceBackend):
         raise BackendError(E_CONTAINER_FAILED, f"无法读取容器状态：{err or out}")
 
     async def ensure_ready(self) -> BackendState:
-        if self._serial:
-            return BackendState(
-                ready=True, adb_serial=self._serial, detail=self.describe()
-            )
+        # 不做缓存短路：本方法只在首次连接与重连时被调用，
+        # 每次都核实容器状态，外部停掉容器后可自愈（missing→create / 非 running→start）
         if not await self._docker_available():
             raise BackendError(E_DOCKER_MISSING, "宿主机未安装或无法访问 docker")
         state = await self._container_state()
@@ -93,8 +95,10 @@ class RedroidBackend(DeviceBackend):
             f"{cfg.redroid_data_path}:/data",  # 持久化系统数据/App/登录态
             "-p",
             f"127.0.0.1:{cfg.redroid_adb_port}:5555",  # ADB 只绑本机回环
-            *cfg.redroid_extra_args,
+            *cfg.redroid_docker_args,  # docker 层参数（--memory 等），必须在镜像名之前
             cfg.redroid_image,
+            # redroid 启动参数（androidboot.redroid_gpu_mode 等）必须位于镜像名之后
+            *cfg.redroid_extra_args,
         ]
         rc, out, err = await self._docker(*args, timeout=_RUN_TIMEOUT_SECONDS)
         if rc != 0:

@@ -19,8 +19,9 @@
 
   "REDROID_IMAGE": {
     "type": "string",
-    "description": "Redroid Docker 镜像；跑微信/QQ 等 ARM 应用需选带 native bridge 的 Android 12 x86_64 变体，具体 tag 以 redroid 官方 README 为准",
-    "default": "redroid/redroid:12.0.0_64-nativebridge"
+    "description": "Redroid Docker 镜像（官方在列 tag）；官方镜像已内置 libndk_translation，x86_64 宿主可直接跑 ARM 应用；需 libhoudini 方案时才自建镜像",
+    "default": "redroid/redroid:12.0.0_64only-latest",
+    "hint": "官方镜像自带 libndk ARM 翻译；自建或第三方镜像做法见 redroid 官方文档"
   },
   "REDROID_CONTAINER": {
     "type": "string",
@@ -39,9 +40,14 @@
     "description": "容器数据目录（宿主机绝对路径）；安卓系统数据、App 与登录态都持久化在这里",
     "default": "/var/lib/companion-phone"
   },
+  "REDROID_DOCKER_ARGS": {
+    "type": "list",
+    "description": "docker 层附加参数（置于镜像名之前），如 --memory=3g",
+    "default": []
+  },
   "REDROID_EXTRA_ARGS": {
     "type": "list",
-    "description": "附加 docker run 参数（如 gpu 加速、内存限制）",
+    "description": "redroid 启动参数（置于镜像名之后），如 androidboot.redroid_gpu_mode=host",
     "default": []
   },
   "REDROID_AUTO_BOOT": {
@@ -91,7 +97,7 @@
 
   "ACTION_MAX_PER_TURN": {
     "type": "int",
-    "description": "单轮对话内允许的最大设备动作数（点按/输入/滑动/按键计数），防失控",
+    "description": "单轮对话内允许的最大设备动作数（点按/按文本点按/输入/滑动/按键/启动应用计数），防失控",
     "default": 8,
     "minimum": 1,
     "maximum": 50
@@ -104,8 +110,8 @@
   },
   "HIGH_RISK_KEYWORDS": {
     "type": "list",
-    "description": "点按目标文本命中任一关键词即视为高危动作",
-    "default": ["发送", "删除", "支付", "转账", "购买", "付款", "确认订单", "注销"]
+    "description": "点按目标文本命中任一关键词即视为高危动作；依赖设备语言，redroid 默认英文 locale，默认表为中英双语",
+    "default": ["发送", "删除", "支付", "转账", "购买", "付款", "确认订单", "注销", "允许", "始终允许", "Send", "Delete", "Pay", "Allow", "Allow all the time", "Uninstall"]
   },
 
   "TASK_MAX_STEPS": {
@@ -156,5 +162,17 @@
     "default": 50,
     "minimum": 1,
     "maximum": 500
+  },
+
+  "TOOL_CHAT_SCOPE": {
+    "type": "string",
+    "description": "LLM 工具的会话范围：private=仅私聊可用（默认，防群成员经提示注入驱动手机）；all=不限制；allowlist=仅 TOOL_ALLOWLIST 中的会话",
+    "options": ["private", "all", "allowlist"],
+    "default": "private"
+  },
+  "TOOL_ALLOWLIST": {
+    "type": "list",
+    "description": "TOOL_CHAT_SCOPE=allowlist 时生效：允许使用手机工具的 unified_msg_origin 列表",
+    "default": []
   }
 }

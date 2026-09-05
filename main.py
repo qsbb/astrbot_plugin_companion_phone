@@ -26,6 +26,7 @@ from .series_diagnostics import (
     diagnostic_event,
     diagnostic_events as read_diagnostic_events,
 )
+from .series_diagnostics import diagnostic_log_contract
 from .tools import create_device_tools
 from .webui import PhoneWebUI
 
@@ -73,16 +74,7 @@ class CompanionPhonePlugin(Star):
 
     # ---------- series.diagnostics@1.0（规范 §5.1 必选契约） ----------
     def diagnostic_log_contract(self) -> dict[str, Any]:
-        return {
-            "name": "series.diagnostics",
-            "version": "1.0",
-            "series_id": "ningxin_suxi",
-            "plugin_id": PLUGIN_ID,
-            "plugin_name": "通",
-            "capabilities": ("read", "clear", "read_events", "clear_events"),
-            "storage": "memory_only",
-            "astrbot_log_propagation": False,
-        }
+        return diagnostic_log_contract()
 
     def diagnostic_events(self, after_seq: int = 0, limit: int = 200) -> dict[str, Any]:
         return read_diagnostic_events(after_seq=after_seq, limit=limit)
@@ -130,7 +122,10 @@ class CompanionPhonePlugin(Star):
     @phone_group.command("shot")
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def phone_shot(self, event: AstrMessageEvent):
-        """抓取当前屏幕截图并发回"""
+        """抓取当前屏幕截图并发回（仅私聊：防止整屏内容被投放到群）"""
+        if event.get_group_id():
+            yield event.plain_result("为保护屏幕隐私，/phone shot 仅可在私聊使用。")
+            return
         try:
             path = await self.service.screenshot_file()
         except Exception as exc:

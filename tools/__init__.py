@@ -37,7 +37,7 @@ def create_device_tools(service: PhoneService) -> list[FunctionTool]:
     tools: list[FunctionTool] = []
     for cls in _TOOL_CLASSES:
         tool = cls()
-        # dataclass 字段之外的运行时引用，绕过 __setattr__ 限制
+        # service 不是 dataclass 字段（pydantic 不收集 mixin 注解），绕过 __setattr__ 注入
         object.__setattr__(tool, "service", service)
         tools.append(tool)
     return tools

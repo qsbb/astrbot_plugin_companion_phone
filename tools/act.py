@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from pydantic import Field
+from pydantic.dataclasses import dataclass
 
 from astrbot.core.agent.run_context import ContextWrapper
 from astrbot.core.agent.tool import FunctionTool, ToolExecResult
@@ -49,7 +48,7 @@ class TapTool(_ToolMixin, FunctionTool[AstrAgentContext]):
                 umo, _int_arg(kwargs, "x"), _int_arg(kwargs, "y")
             )
 
-        return await self._run("tap", invoke)
+        return await self._call(context, "tap", invoke)
 
 
 @dataclass
@@ -84,7 +83,7 @@ class ClickTextTool(_ToolMixin, FunctionTool[AstrAgentContext]):
         async def invoke():
             return await self.service.click_text(umo, _str_arg(kwargs, "text"))
 
-        return await self._run("click_text", invoke)
+        return await self._call(context, "click_text", invoke)
 
 
 @dataclass
@@ -125,7 +124,7 @@ class InputTextTool(_ToolMixin, FunctionTool[AstrAgentContext]):
                 umo, _str_arg(kwargs, "text"), _bool_arg(kwargs, "clear", False)
             )
 
-        return await self._run("input_text", invoke)
+        return await self._call(context, "input_text", invoke)
 
 
 @dataclass
@@ -169,7 +168,7 @@ class SwipeTool(_ToolMixin, FunctionTool[AstrAgentContext]):
                 umo, _str_arg(kwargs, "direction"), int(distance)
             )
 
-        return await self._run("swipe", invoke)
+        return await self._call(context, "swipe", invoke)
 
 
 @dataclass
@@ -203,4 +202,4 @@ class PressKeyTool(_ToolMixin, FunctionTool[AstrAgentContext]):
         async def invoke():
             return await self.service.press_key(umo, _str_arg(kwargs, "key"))
 
-        return await self._run("press_key", invoke)
+        return await self._call(context, "press_key", invoke)

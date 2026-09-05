@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from pydantic import Field
+from pydantic.dataclasses import dataclass
 
 from astrbot.core.agent.run_context import ContextWrapper
 from astrbot.core.agent.tool import FunctionTool, ToolExecResult
@@ -43,7 +42,7 @@ class LaunchAppTool(_ToolMixin, FunctionTool[AstrAgentContext]):
         async def invoke():
             return await self.service.launch_app(umo, _str_arg(kwargs, "alias"))
 
-        return await self._run("launch_app", invoke)
+        return await self._call(context, "launch_app", invoke)
 
 
 @dataclass
@@ -89,4 +88,4 @@ class WaitTool(_ToolMixin, FunctionTool[AstrAgentContext]):
                 umo, _str_arg(kwargs, "text"), int(timeout)
             )
 
-        return await self._run("wait_element", invoke)
+        return await self._call(context, "wait_element", invoke)

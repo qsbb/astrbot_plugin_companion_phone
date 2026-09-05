@@ -58,6 +58,54 @@ def test_tap_bounds():
     assert excinfo.value.code == E_OUT_OF_BOUNDS
 
 
+def test_tap_xy_zero_size_fail_closed():
+    """回归锚（F-25）：读不到屏幕尺寸时拒绝，而不是放行任意坐标。"""
+    gate = make_gate()
+    with pytest.raises(SafetyError) as excinfo:
+        gate.check_tap_xy(10, 10, [0, 0])
+    assert excinfo.value.code == E_OUT_OF_BOUNDS
+
+
+def test_check_current_app_high_blocked():
+    """动作级门控回归锚（F-05）：前台为高危应用时 tap/input/swipe 必须可被拦。"""
+    gate = make_gate()
+    with pytest.raises(SafetyError) as excinfo:
+        gate.check_current_app("com.tencent.mm")
+    assert excinfo.value.code == E_HIGH_RISK_BLOCKED
+
+
+def test_check_current_app_low_passes():
+    gate = make_gate()
+    assert gate.check_current_app("com.android.browser") is not None
+
+
+def test_check_current_app_non_whitelisted_denied():
+    """白名单即操作边界（安全模型 v4）：launcher/权限对话框/未知包名全部拒绝。"""
+    gate = make_gate()
+    for pkg in (
+        "com.android.launcher",
+        "com.google.android.permissioncontroller",
+        "com.android.systemui",
+        "",
+    ):
+        with pytest.raises(SafetyError) as excinfo:
+            gate.check_current_app(pkg)
+        assert excinfo.value.code == E_HIGH_RISK_BLOCKED
+        assert "APP_WHITELIST" in excinfo.value.message
+
+
+def test_check_current_app_unknown_package_fail_closed():
+    gate = make_gate()
+    with pytest.raises(SafetyError) as excinfo:
+        gate.check_current_app("")
+    assert excinfo.value.code == E_HIGH_RISK_BLOCKED
+
+
+def test_check_current_app_allowed_when_enabled():
+    gate = make_gate(ALLOW_HIGH_RISK=True)
+    assert gate.check_current_app("com.tencent.mm") is not None
+
+
 def test_budget_window():
     gate = make_gate(ACTION_MAX_PER_TURN=2)
     gate.budget_consume("umo1")

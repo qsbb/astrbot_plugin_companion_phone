@@ -7,11 +7,128 @@ from helpers import make_cfg
 
 
 def test_screen_ok(service):
-    result = asyncio.run(service.screen())
+    result = asyncio.run(service.screen("u1"))
     assert result["status"] == "ok"
     assert result["screen_size"] == [1080, 2400]
     assert len(result["nodes"]) == 2
-    assert result["screenshot"].endswith(".png")
+    assert "screenshot" not in result  # F-17 回归锚：截图路径不回传模型
+
+
+def test_tap_blocked_in_high_risk_foreground(service):
+    """动作级门控回归锚：即使未经过 launch_app 进入高危应用，tap 也必须被拦。"""
+    asyncio.run(service.tap("u1", 1, 1))  # 先触发会话建立
+    sess = service._fake["session"]
+
+    async def high_app():
+        return {"package": "com.tencent.mm", "activity": ".UI"}
+
+    sess.current_app = high_app
+    result = asyncio.run(service.tap("u1", 540, 1200))
+    assert result["status"] == "error"
+    assert result["error_code"] == "high_risk_blocked"
+
+
+def test_input_blocked_in_high_risk_foreground(service):
+    asyncio.run(service.tap("u1", 1, 1))  # 先触发会话建立
+    sess = service._fake["session"]
+
+    async def high_app():
+        return {"package": "com.tencent.mm", "activity": ".UI"}
+
+    sess.current_app = high_app
+    result = asyncio.run(service.input_text("u1", "你好", False))
+    assert result["error_code"] == "high_risk_blocked"
+
+
+def test_swipe_endpoints_clamped(service):
+    result = asyncio.run(service.swipe("u1", "up", 2000))
+    assert result["status"] == "ok"
+    sess = service._fake["session"]
+    swipes = [c for c in sess.calls if c[0] == "swipe"]
+    _, sx, sy, ex, ey = swipes[-1]
+    assert 0 <= sx <= 1080 and 0 <= ex <= 1080
+    assert 0 <= sy <= 2400 and 0 <= ey <= 2400
+
+
+def test_session_gate_blocks_group_events(service):
+    class GroupEvent:
+        unified_msg_origin = "aiocqhttp:group:123"
+
+        def get_group_id(self):
+            return "123"
+
+    verdict = service.check_session_allowed(GroupEvent())
+    assert verdict is not None
+    assert verdict["error_code"] == "session_not_allowed"
+
+    class PrivateEvent:
+        unified_msg_origin = "aiocqhttp:private:u1"
+
+        def get_group_id(self):
+            return ""
+
+    assert service.check_session_allowed(PrivateEvent()) is None
+
+
+def test_session_gate_fail_closed_on_broken_event(service):
+    """回归锚（G P2-2）：事件字段异常时 fail-closed，不静默放行。"""
+
+    class BrokenEvent:
+        unified_msg_origin = "x"
+
+        def get_group_id(self):
+            raise RuntimeError("boom")
+
+    verdict = service.check_session_allowed(BrokenEvent())
+    assert verdict is not None
+    assert verdict["error_code"] == "session_not_allowed"
+
+
+def test_status_verbose_hides_backend_details(service):
+    """回归锚（G P2-4）：LLM 工具的 status 不暴露容器/镜像/端口。"""
+    asyncio.run(service.tap("u1", 1, 1))  # 先建立后端
+    trimmed = asyncio.run(service.status())
+    full = asyncio.run(service.status(verbose=True))
+    assert "backend" not in trimmed
+    assert "backend" in full
+
+
+def test_press_enter_gated_but_navigation_exempt(service):
+    """按键分治回归锚（G P1-2）：enter 过门控，back/home 豁免（脱困通道）。"""
+    asyncio.run(service.tap("u1", 1, 1))  # 建立会话（browser，白名单 low）
+    sess = service._fake["session"]
+
+    async def high_app():
+        return {"package": "com.tencent.mm", "activity": ".UI"}
+
+    sess.current_app = high_app
+    result = asyncio.run(service.press_key("u1", "enter"))
+    assert result["error_code"] == "high_risk_blocked"
+    result = asyncio.run(service.press_key("u1", "back"))
+    assert result["status"] == "ok"  # 导航键豁免
+    result = asyncio.run(service.press_key("u1", "home"))
+    assert result["status"] == "ok"
+
+
+def test_budget_not_consumed_when_connect_fails(tmp_path, monkeypatch):
+    from service_fixtures import FakeSession, install_fake_backend, make_service
+
+    install_fake_backend(monkeypatch)
+    svc = make_service(tmp_path, make_cfg(ACTION_MAX_PER_TURN=1))
+
+    async def failing_connect(self):
+        raise RuntimeError("offline")
+
+    monkeypatch.setattr(FakeSession, "connect", failing_connect)
+    first = asyncio.run(svc.tap("u1", 5, 5))
+    assert first["status"] == "error"
+
+    async def ok_connect(self):
+        return None
+
+    monkeypatch.setattr(FakeSession, "connect", ok_connect)
+    second = asyncio.run(svc.tap("u1", 5, 5))
+    assert second["status"] == "ok"  # 连接失败不消耗预算
 
 
 def test_tap_ok(service):
@@ -87,15 +204,17 @@ def test_budget_exceeded(service):
     assert blocked["error_code"] == "action_budget_exceeded"
 
 
-def test_input_text_masked_in_audit(service):
+def test_input_text_not_recorded_in_audit(service):
     long_text = "这是一段很长很长的输入内容" * 3  # 66 字符
     result = asyncio.run(service.input_text("u1", long_text, False))
     assert result["status"] == "ok"
+    assert result["ime_fallback"] is False
     records = service.audit_recent(20)
     rec = [r for r in records if r["action"] == "input_text"][-1]
-    assert long_text not in json.dumps(rec, ensure_ascii=False)  # 全文不落盘
-    assert rec["params"]["text_len"] == len(long_text)
-    assert rec["params"]["text_head"].endswith("***")
+    dumped = json.dumps(rec, ensure_ascii=False)
+    assert long_text not in dumped
+    assert "这是一段" not in dumped  # 连片段都不落盘（验证码类短文本防泄漏）
+    assert rec["params"] == {"text_len": len(long_text)}
 
 
 def test_swipe_invalid_direction(service):

@@ -9,6 +9,12 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT.parent) not in sys.path:
     sys.path.insert(0, str(ROOT.parent))
 
+# 离线环境注入最小 astrbot stub（核官方测试方案）；真实宿主上使用真实模块
+try:
+    import astrbot  # noqa: F401
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "astrbot_stub"))
+
 from service_fixtures import install_fake_backend, make_service  # noqa: E402
 
 

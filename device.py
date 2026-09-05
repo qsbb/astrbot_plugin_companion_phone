@@ -13,10 +13,22 @@ _BOUNDS_RE = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
 
 # 规范 §3.2：外部 IO 必须有超时上限；单设备操作挂起不得拖死设备锁
 _DEVICE_OP_TIMEOUT_SECONDS = 60.0
+_CONNECT_TIMEOUT_SECONDS = 60.0
 
-# 常见弹窗的确认文本；dismiss_popups 逐个尝试代点。
-# 刻意不含「确定」——语义中性，可能在支付/删除对话框上代点确认。
-_POPUP_TEXTS = ("我知道了", "允许", "始终允许", "稍后", "以后再说", "关闭广告")
+# 常见信息性弹窗的代点名单。
+# 刻意排除：确定（语义中性，可能在支付/删除对话框代点确认）、
+# 允许/始终允许（Android 运行时权限授权按钮，授权是不可逆动作，必须留给显式决策）。
+_POPUP_TEXTS = ("我知道了", "稍后", "以后再说", "关闭广告")
+
+
+def _u2_element_not_found() -> tuple[type, ...]:
+    """u2 v3 的元素消失异常类型；不可用时返回空元组（不捕获）。"""
+    try:
+        from uiautomator2.exceptions import UiObjectNotFoundError
+
+        return (UiObjectNotFoundError,)
+    except Exception:
+        return ()
 
 
 class DeviceSession:
@@ -24,6 +36,8 @@ class DeviceSession:
 
     uiautomator2/adbutils 均为同步 API：所有调用统一 asyncio.to_thread，
     单设备是串行资源，self._lock 保证动作不交错。
+    u2 v3 没有可靠的进程内探活接口（2.x 的 d.alive 已移除）：
+    连接只在 _d 为空时建立，操作失败时丢弃连接并重试一次。
     """
 
     def __init__(self, backend: Any) -> None:
@@ -41,11 +55,23 @@ class DeviceSession:
         async with self._lock:
             if self._closed:
                 raise DeviceError(E_DEVICE_OFFLINE, "会话已关闭")
-            state = await self._backend.ensure_ready()
-            try:
-                self._d = await asyncio.to_thread(self._connect_sync, state.adb_serial)
-            except Exception as exc:
-                raise DeviceError(E_DEVICE_OFFLINE, f"设备连接失败：{exc}") from exc
+            if self._d is None:
+                await self._connect_locked()
+
+    async def _connect_locked(self) -> None:
+        state = await self._backend.ensure_ready()
+        try:
+            self._d = await asyncio.wait_for(
+                asyncio.to_thread(self._connect_sync, state.adb_serial),
+                timeout=_CONNECT_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            raise DeviceError(
+                E_DEVICE_TIMEOUT,
+                f"设备连接超时（{_CONNECT_TIMEOUT_SECONDS:.0f}s）",
+            ) from None
+        except Exception as exc:
+            raise DeviceError(E_DEVICE_OFFLINE, f"设备连接失败：{exc}") from exc
 
     @staticmethod
     def _connect_sync(serial: str) -> Any:
@@ -53,45 +79,54 @@ class DeviceSession:
 
         return u2.connect(serial)
 
-    async def assert_ready(self) -> None:
-        """探活；不 ready 时经 backend 自愈一次再复检。"""
+    async def _run(
+        self, fn: Callable[..., Any], *args: Any, retry: bool = True, **kwargs: Any
+    ) -> Any:
+        """在设备锁内执行同步函数；硬超时防挂起。
+
+        retry=True（感知类）：失败丢弃连接、重连后重试一次；
+        retry=False（写动作）：失败即报 device_offline——tap/input 等
+        非幂等动作重放有双执行风险（第二轮盲测 F P3-2）。
+        """
         async with self._lock:
             if self._closed:
                 raise DeviceError(E_DEVICE_OFFLINE, "会话已关闭")
-            if self._d is not None and await asyncio.to_thread(self._alive_sync):
-                return
-            state = await self._backend.ensure_ready()
+            if self._d is None:
+                await self._connect_locked()
             try:
-                self._d = await asyncio.to_thread(self._connect_sync, state.adb_serial)
-            except Exception as exc:
-                raise DeviceError(E_DEVICE_OFFLINE, f"设备重连失败：{exc}") from exc
-
-    def _alive_sync(self) -> bool:
-        try:
-            return bool(self._d.alive)
-        except Exception:
-            return False
-
-    async def _run(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
-        """确保连接后，在设备锁内执行同步函数；硬超时防挂起。"""
-        await self.assert_ready()
-        async with self._lock:
-            try:
-                return await asyncio.wait_for(
-                    asyncio.to_thread(fn, *args, **kwargs),
-                    timeout=_DEVICE_OP_TIMEOUT_SECONDS,
-                )
-            except asyncio.TimeoutError:
-                # 超时说明连接可能已僵死：丢弃设备引用，下次操作强制重连
-                self._d = None
-                raise DeviceError(
-                    E_DEVICE_TIMEOUT,
-                    f"设备操作超时（{_DEVICE_OP_TIMEOUT_SECONDS:.0f}s），请稍后重试",
-                ) from None
+                return await self._execute(fn, *args, **kwargs)
             except DeviceError:
                 raise
-            except Exception as exc:
-                raise DeviceError(E_DEVICE_OFFLINE, f"设备操作失败：{exc}") from exc
+            except Exception:
+                if not retry:
+                    self._d = None
+                    raise DeviceError(
+                        E_DEVICE_OFFLINE, "设备操作失败，连接已重置；请重试"
+                    ) from None
+                # 连接可能已失效：丢弃并重连一次，仍失败才向外报错
+                self._d = None
+                await self._connect_locked()
+                try:
+                    return await self._execute(fn, *args, **kwargs)
+                except DeviceError:
+                    raise
+                except Exception as exc:
+                    raise DeviceError(E_DEVICE_OFFLINE, f"设备操作失败：{exc}") from exc
+
+    async def _execute(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(fn, *args, **kwargs),
+                timeout=_DEVICE_OP_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            # 超时说明连接可能已僵死：丢弃设备引用，下次操作强制重连。
+            # 注意 asyncio.to_thread 无法中断：被放弃的线程可能仍在设备上完成动作。
+            self._d = None
+            raise DeviceError(
+                E_DEVICE_TIMEOUT,
+                f"设备操作超时（{_DEVICE_OP_TIMEOUT_SECONDS:.0f}s），请稍后重试",
+            ) from None
 
     async def close(self) -> None:
         async with self._lock:
@@ -131,6 +166,8 @@ class DeviceSession:
 
     @staticmethod
     def _parse_bounds(raw: str) -> list[int] | None:
+        # 刻意不匹配负坐标：离屏/部分可见节点的 bounds 不可靠（如 [-50,0][100,100]），
+        # 丢弃比给模型错误坐标更安全
         m = _BOUNDS_RE.match(raw)
         if not m:
             return None
@@ -155,16 +192,6 @@ class DeviceSession:
         w, h = await self._run(_size)
         return [w, h]
 
-    async def screen_on(self) -> bool:
-        info = await self._run(self._info_sync)
-        return bool(info.get("screenOn"))
-
-    def _info_sync(self) -> dict:
-        try:
-            return dict(self._d.info or {})
-        except Exception:
-            return {}
-
     async def current_app(self) -> dict:
         try:
             return await self._run(self._current_app_sync)
@@ -180,54 +207,79 @@ class DeviceSession:
 
     # ---------- 操作 ----------
     async def tap(self, x: int, y: int) -> None:
-        await self._run(self._d.click, x, y)
+        # 闭包在锁内求值 self._d：超时重置后不得裸解引用 None（第二轮盲测 F P2-1）
+        await self._run(lambda: self._d.click(x, y), retry=False)
 
     async def click_text(self, text: str) -> list[int]:
         return await self._run(self._click_text_sync, text)
 
     def _click_text_sync(self, text: str) -> list[int]:
         sel = self._d(text=text)
-        if not sel.exists:
-            raise DeviceError(E_ELEMENT_NOT_FOUND, f"屏幕上没有找到文本：{text}")
-        info = sel.info or {}
-        sel.click()
-        return info.get("bounds") or []
+        try:
+            if not sel.exists:
+                raise DeviceError(E_ELEMENT_NOT_FOUND, f"屏幕上没有找到文本：{text}")
+            info = sel.info or {}
+            sel.click()
+        except _u2_element_not_found() as exc:
+            # exists 与 click 之间元素消失
+            raise DeviceError(
+                E_ELEMENT_NOT_FOUND, f"屏幕上没有找到文本：{text}"
+            ) from exc
+        return self._normalize_bounds(info.get("bounds"))
+
+    @staticmethod
+    def _normalize_bounds(raw: Any) -> list[int]:
+        """u2 的 selector.info["bounds"] 是 {left,top,right,bottom}；统一为 [x1,y1,x2,y2]。"""
+        if isinstance(raw, dict):
+            return [
+                int(raw.get("left", 0)),
+                int(raw.get("top", 0)),
+                int(raw.get("right", 0)),
+                int(raw.get("bottom", 0)),
+            ]
+        if isinstance(raw, (list, tuple)) and len(raw) == 4:
+            return [int(v) for v in raw]
+        return [0, 0, 0, 0]
 
     async def input_text(self, text: str, clear: bool) -> bool:
-        """返回是否走了 ASCII 回退（FastInputIME 不可用时）。"""
-        return await self._run(self._input_sync, text, clear)
+        """返回是否走了输入法回退（FastInputIME 不可用时由 u2 内部回退 set_text）。"""
+        return await self._run(self._input_sync, text, clear, retry=False)
 
     def _input_sync(self, text: str, clear: bool) -> bool:
-        ascii_fallback = False
+        ime_fallback = False
         try:
-            self._d.set_fastinput_ime(True)
+            # u2 v3：set_fastinput_ime 已弃用，官方推荐 set_input_ime
+            try:
+                self._d.set_input_ime(True)
+            except AttributeError:
+                self._d.set_fastinput_ime(True)
         except Exception:
-            ascii_fallback = True
+            ime_fallback = True
         if clear:
             try:
                 self._d.clear_text()
             except Exception:
                 pass
         self._d.send_keys(text)
-        return ascii_fallback
+        return ime_fallback
 
     async def swipe(self, sx: int, sy: int, ex: int, ey: int, duration_ms: int) -> None:
-        await self._run(self._d.swipe, sx, sy, ex, ey, duration_ms / 1000.0)
+        await self._run(
+            lambda: self._d.swipe(sx, sy, ex, ey, duration_ms / 1000.0), retry=False
+        )
 
     async def press_key(self, key: str) -> None:
         await self._run(self._press_key_sync, key)
 
     def _press_key_sync(self, key: str) -> None:
-        if key == "recents":
-            self._d.shell("input keyevent 164")  # KEYCODE_APP_SWITCH
-            return
-        self._d.press(key)
+        # u2 press() 的官方键名是 "recent"（单数）；工具层对外别名保持 "recents"
+        self._d.press("recent" if key == "recents" else key)
 
     async def app_start(self, package: str) -> None:
-        await self._run(self._d.app_start, package)
+        await self._run(lambda: self._d.app_start(package), retry=False)
 
     async def app_stop(self, package: str) -> None:
-        await self._run(self._d.app_stop, package)
+        await self._run(lambda: self._d.app_stop(package), retry=False)
 
     async def wait_text(self, text: str, timeout_s: int) -> bool:
         return bool(await self._run(self._wait_text_sync, text, timeout_s))

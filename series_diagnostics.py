@@ -27,8 +27,23 @@ _LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 
 _events: deque[dict[str, Any]] = deque(maxlen=_MAX_EVENTS)
 _dropped_before = 0
+_next_seq = 1  # 进程级单调计数器：clear 不归零，聚合端旧游标不会吞掉新事件
 _stream_id = str(uuid.uuid4())
 _lock = threading.Lock()
+
+
+def diagnostic_log_contract() -> dict[str, Any]:
+    """series.diagnostics@1.0 契约声明（唯一事实源，main.py 委托此函数）。"""
+    return {
+        "name": "series.diagnostics",
+        "version": "1.0",
+        "series_id": "ningxin_suxi",
+        "plugin_id": PLUGIN_ID,
+        "plugin_name": PLUGIN_NAME,
+        "capabilities": ("read", "clear", "read_events", "clear_events"),
+        "storage": "memory_only",
+        "astrbot_log_propagation": False,
+    }
 
 
 def _redact(value: Any) -> Any:
@@ -55,6 +70,7 @@ def diagnostic_event(
     details: dict[str, Any] | None = None,
 ) -> None:
     """记录一条诊断事件；不向 AstrBot 核心日志传播（astrbot_log_propagation=False）。"""
+    global _next_seq
     if level not in _LEVELS:
         level = "INFO"
     with _lock:
@@ -63,7 +79,7 @@ def diagnostic_event(
             _dropped_before += 1
         _events.append(
             {
-                "seq": (_events[-1]["seq"] + 1) if _events else 1,
+                "seq": _next_seq,
                 "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
                 "plugin_id": PLUGIN_ID,
                 "plugin_name": PLUGIN_NAME,
@@ -73,6 +89,7 @@ def diagnostic_event(
                 "details": _redact(details or {}),
             }
         )
+        _next_seq += 1
 
 
 def diagnostic_events(after_seq: int = 0, limit: int = 200) -> dict[str, Any]:
@@ -90,6 +107,7 @@ def diagnostic_events(after_seq: int = 0, limit: int = 200) -> dict[str, Any]:
 
 
 def diagnostic_clear() -> None:
+    """清空事件缓冲；seq 持续单调，持有旧游标的聚合端不会丢失新事件。"""
     with _lock:
         global _dropped_before
         _events.clear()

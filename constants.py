@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 PLUGIN_ID = "astrbot_plugin_companion_phone"
-PLUGIN_VERSION = "0.0.1"  # 唯一事实源为 metadata.yaml 的 version；二者由测试断言一致
+PLUGIN_VERSION = "0.0.3"  # 唯一事实源为 metadata.yaml 的 version；二者由测试断言一致
 __version__ = PLUGIN_VERSION  # 规范 §10：与 metadata.yaml version 同步
 PLUGIN_NAME = "通"  # 凝心溯溪系列单字，用户已确认（2026-09-05）
 PLUGIN_DISPLAY_NAME = "凝心溯溪-通"
@@ -38,7 +38,7 @@ TOOL_NAMES = (
 E_PLUGIN_DISABLED = "plugin_disabled"
 E_PAUSED = "all_actions_paused"
 E_DEVICE_OFFLINE = "device_offline"
-E_MODE_INVALID = "mode_invalid"
+E_DEVICE_TIMEOUT = "device_timeout"
 E_DOCKER_MISSING = "docker_missing"
 E_CONTAINER_FAILED = "container_failed"
 E_ADB_CONNECT_FAILED = "adb_connect_failed"
@@ -52,6 +52,7 @@ E_INVALID_ARGUMENT = "invalid_argument"
 E_DEVICE_TIMEOUT = "device_timeout"
 E_UNKNOWN_PANEL = "UNKNOWN_PANEL"  # series.webui@1.0 规范错误码（§5.3 大写）
 E_UNKNOWN_ACTION = "UNKNOWN_ACTION"
+E_SESSION_NOT_ALLOWED = "session_not_allowed"
 E_INTERNAL = "internal_error"
 
 # press_key 支持的按键

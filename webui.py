@@ -9,7 +9,6 @@ from .constants import (
     E_UNKNOWN_PANEL,
     PLUGIN_ID,
 )
-from .errors import PhoneError
 from .log import logger
 from .service import PhoneService
 
@@ -53,6 +52,11 @@ _AUDIT_ACTIONS: tuple[dict[str, Any], ...] = (
 )
 
 
+def _unknown(kind: str, code: str, detail: str) -> dict[str, Any]:
+    """规范 §5.3：未知 id 以「返回」而非抛异常表达 fail-closed。"""
+    return {"success": False, "error_code": code, "message": f"未知{kind}：{detail}"}
+
+
 class PhoneWebUI:
     """series.webui@1.0 面板三方法（规范 §5.3）。
 
@@ -75,26 +79,34 @@ class PhoneWebUI:
         }
 
     async def webui_panel_data(self, panel: str) -> dict[str, Any]:
-        if not isinstance(panel, str) or not _ID_RE.match(panel):
-            raise PhoneError(E_UNKNOWN_PANEL, f"未知面板：{panel!r}")
+        if (
+            not isinstance(panel, str)
+            or not _ID_RE.match(panel)
+            or panel not in _PANEL_IDS
+        ):
+            return _unknown("面板", E_UNKNOWN_PANEL, repr(panel))
         if panel == "phone_status":
             return await self._status_data()
         if panel == "phone_apps":
             return self._apps_data()
-        if panel == "phone_audit":
-            return self._audit_data()
-        raise PhoneError(E_UNKNOWN_PANEL, f"未知面板：{panel!r}")
+        return self._audit_data()
 
     async def webui_panel_action(
         self, panel: str, action: str, payload: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        if not isinstance(panel, str) or not _ID_RE.match(panel):
-            raise PhoneError(E_UNKNOWN_PANEL, f"未知面板：{panel!r}")
+        if (
+            not isinstance(panel, str)
+            or not _ID_RE.match(panel)
+            or panel not in _PANEL_IDS
+        ):
+            return _unknown("面板", E_UNKNOWN_PANEL, repr(panel))
         if not isinstance(action, str) or not _ID_RE.match(action):
-            raise PhoneError(E_UNKNOWN_ACTION, f"未知动作：{action!r}")
+            return _unknown("动作", E_UNKNOWN_ACTION, repr(action))
         allowed = _ACTION_TABLE.get((panel, action))
         if allowed is None:
-            raise PhoneError(E_UNKNOWN_ACTION, f"面板 {panel} 不支持动作：{action!r}")
+            return _unknown(
+                "动作", E_UNKNOWN_ACTION, f"面板 {panel!r} 不支持 {action!r}"
+            )
         message = await allowed(self)
         return {"success": True, "message": message}
 
@@ -133,6 +145,7 @@ class PhoneWebUI:
             {"item": "前台应用", "value": current.get("package") or "（未知）"},
             {"item": "白名单应用数", "value": str(len(cfg.app_whitelist))},
             {"item": "高危放行", "value": "开启" if cfg.allow_high_risk else "关闭"},
+            {"item": "工具会话范围", "value": cfg.tool_chat_scope},
         ]
         return self._render(
             "手机状态", "设备与安全策略概览", _ITEM_COLUMNS, rows, _STATUS_ACTIONS
@@ -145,7 +158,7 @@ class PhoneWebUI:
             for app in cfg.app_whitelist
         ]
         return self._render(
-            "应用白名单", "别名不会暴露包名以外的信息给模型", _APP_COLUMNS, rows
+            "应用白名单", "模型只见别名；包名不进入工具描述", _APP_COLUMNS, rows
         )
 
     def _audit_data(self) -> dict[str, Any]:
@@ -161,7 +174,7 @@ class PhoneWebUI:
         ]
         return self._render(
             "操作审计",
-            "最近 50 条脱敏记录（正文永不落盘）",
+            "最近 50 条记录；输入类正文不全文落盘（仅记长度）",
             _AUDIT_COLUMNS,
             rows,
             _AUDIT_ACTIONS,
@@ -205,3 +218,5 @@ _ACTION_TABLE: dict[tuple[str, str], Callable[["PhoneWebUI"], Any]] = {
     ("phone_status", "resume"): PhoneWebUI._action_resume,
     ("phone_audit", "clear"): PhoneWebUI._action_clear_audit,
 }
+
+_PANEL_IDS = frozenset(p["id"] for p in PANELS)

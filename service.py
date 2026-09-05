@@ -6,15 +6,18 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from .audit import AuditLog, mask_text
+from .audit import AuditLog
 from .backend import create_backend
 from .config import PhoneConfig
 from .constants import (
+    E_DEVICE_OFFLINE,
     E_HIGH_RISK_BLOCKED,
     E_INPUT_TOO_LONG,
+    E_INTERNAL,
     E_INVALID_ARGUMENT,
     E_PAUSED,
     E_PLUGIN_DISABLED,
+    E_SESSION_NOT_ALLOWED,
     KEY_NAMES,
     MODE_REDROID,
     SWIPE_DIRECTIONS,
@@ -28,7 +31,7 @@ _INPUT_MAX_LENGTH = 500
 
 
 class PhoneService:
-    """业务编排：启停检查 → 预算 → 拟人延时 → 设备会话 → 审计。
+    """业务编排：启停检查 → 会话 → 预算 → 拟人延时 → 设备会话 → 审计。
 
     所有公开方法返回 dict；业务异常统一翻译为
     {"status":"error","error_code":...,"message":...}，工具层不再二次处理。
@@ -49,6 +52,7 @@ class PhoneService:
         self._session: DeviceSession | None = None
         self._mode: str | None = None
         self._terminated = False
+        self._session_lock = asyncio.Lock()
 
     # ---------- 内部 ----------
     def _cfg(self) -> PhoneConfig:
@@ -64,8 +68,44 @@ class PhoneService:
             raise PhoneError(E_PAUSED, "手机动作已被管理员暂停")
         return cfg
 
+    def check_session_allowed(self, event: Any) -> dict | None:
+        """工具会话门控（安全层）：None=放行，否则返回错误 dict。
+
+        - all：不限制；
+        - private（默认）：仅私聊/WebChat 可用，群聊拒绝——群成员无法经提示注入驱动手机；
+        - allowlist：仅 TOOL_ALLOWLIST 中的 unified_msg_origin 可用。
+        """
+        cfg = self._cfg()
+        if cfg.tool_chat_scope == "all":
+            return None
+        try:
+            umo = str(event.unified_msg_origin or "")
+            is_group = bool(event.get_group_id())
+        except Exception:
+            # 事件存在但字段异常 → fail-closed（规范总则 #4）
+            return PhoneError(
+                E_SESSION_NOT_ALLOWED, "无法解析当前会话，手机工具被拒绝"
+            ).public_dict("session")
+        if cfg.tool_chat_scope == "private":
+            if is_group:
+                return PhoneError(
+                    E_SESSION_NOT_ALLOWED,
+                    "手机工具仅在私聊会话可用；如需群聊使用请管理员调整 TOOL_CHAT_SCOPE",
+                ).public_dict("session")
+            return None
+        if umo in cfg.tool_allowlist:
+            return None
+        return PhoneError(
+            E_SESSION_NOT_ALLOWED, "当前会话不在工具允许列表（TOOL_ALLOWLIST）"
+        ).public_dict("session")
+
     async def _get_session(self, cfg: PhoneConfig) -> DeviceSession:
         """懒加载单例；MODE 变更后自动重建（/phone reload 或配置热更新）。"""
+        async with self._session_lock:
+            return await self._get_session_locked(cfg)
+
+    async def _get_session_locked(self, cfg: PhoneConfig) -> DeviceSession:
+        """内部版本：调用方必须已持有 _session_lock（asyncio.Lock 不可重入）。"""
         if self._session is not None and self._mode == cfg.mode:
             return self._session
         await self._close_session()
@@ -74,9 +114,13 @@ class PhoneService:
         self._mode = cfg.mode
         try:
             await self._session.connect()
-        except Exception:
+        except PhoneError:
             await self._close_session()
             raise
+        except Exception as exc:
+            # 非预期连接异常归一为 device_offline，避免 RuntimeError 穿透工具层
+            await self._close_session()
+            raise PhoneError(E_DEVICE_OFFLINE, f"设备连接失败：{exc}") from exc
         return self._session
 
     async def _close_session(self) -> None:
@@ -124,9 +168,10 @@ class PhoneService:
         try:
             cfg = self._ensure_active()
             self._safety.update_cfg(cfg)
+            session = await self._get_session(cfg)
+            # 预算在连接建立之后扣减：设备离线时不白烧配额
             if consume_budget:
                 self._safety.budget_consume(umo)
-            session = await self._get_session(cfg)
             if cfg.humanize_delay and consume_budget:
                 await asyncio.sleep(
                     random.uniform(cfg.delay_ms_min, cfg.delay_ms_max) / 1000.0
@@ -137,6 +182,15 @@ class PhoneService:
                 umo, self._cfg(), action, params, "error", exc.code, started
             )
             return exc.public_dict(action)
+        except Exception:
+            # 非预期异常也必须落审计（规范总则 #5），并归一为 internal_error
+            logger.exception("[companion-phone] unexpected error in action %s", action)
+            await self._audit_async(
+                umo, self._cfg(), action, params, "error", E_INTERNAL, started
+            )
+            return PhoneError(E_INTERNAL, "内部错误，请管理员查看日志").public_dict(
+                action
+            )
         await self._audit_async(umo, cfg, action, params, "ok", "", started)
         payload: dict[str, Any] = {"status": "ok", "action": action}
         if isinstance(result, dict):
@@ -162,7 +216,8 @@ class PhoneService:
             pass
 
     # ---------- 感知（只读，不消耗预算） ----------
-    async def status(self) -> dict:
+    async def status(self, verbose: bool = False) -> dict:
+        """verbose=False（LLM 工具）：裁剪基础设施细节，不向模型暴露容器/镜像/端口。"""
         cfg = self._cfg()
         payload: dict[str, Any] = {
             "status": "ok",
@@ -173,11 +228,11 @@ class PhoneService:
             "whitelist_size": len(cfg.app_whitelist),
         }
         if self._backend is not None:
-            payload["backend"] = self._backend.describe()
+            if verbose:
+                payload["backend"] = self._backend.describe()
             state = await self._backend.health()
             payload["ready"] = state.ready
         else:
-            payload["backend"] = {"mode": cfg.mode, "note": "未初始化"}
             payload["ready"] = False
         if payload["ready"] and self._session is not None:
             try:
@@ -186,22 +241,33 @@ class PhoneService:
                 pass
         return payload
 
-    async def screen(self) -> dict:
+    async def screen(self, umo: str = "") -> dict:
         started = time.monotonic()
         cfg = self._ensure_active()
         self._safety.update_cfg(cfg)
         try:
             session = await self._get_session(cfg)
-            await session.dismiss_popups()  # 弹窗会遮挡控件树，先清理信息性弹窗
             current = await session.current_app()
+            popups = 0
+            # 代点只在白名单 low 前台执行：高危/未知前台不自动点任何东西
+            entry = self._safety.app_entry_for_package(current.get("package", ""))
+            if entry is not None and entry.risk == "low":
+                popups = await session.dismiss_popups()
             size = await session.screen_size()
             nodes = await session.ui_tree(cfg.ui_tree_max_nodes)
-            shot = await self._take_screenshot(session, cfg)
+            # 截图仅存盘供管理员（/phone shot）与排障；服务器路径不进入模型上下文
+            await self._take_screenshot(session, cfg)
         except PhoneError as exc:
             await self._audit_async("", cfg, "screen", {}, "error", exc.code, started)
             return exc.public_dict("screen")
         await self._audit_async(
-            "", cfg, "screen", {"nodes": len(nodes)}, "ok", "", started
+            umo,
+            cfg,
+            "screen",
+            {"nodes": len(nodes), "popups": popups},
+            "ok",
+            "",
+            started,
         )
         return {
             "status": "ok",
@@ -209,7 +275,6 @@ class PhoneService:
             "current_app": current,
             "screen_size": size,
             "nodes": nodes,
-            "screenshot": str(shot),
         }
 
     # ---------- 操作 ----------
@@ -217,6 +282,9 @@ class PhoneService:
         async def _act(session: DeviceSession) -> dict:
             size = await session.screen_size()
             self._safety.check_tap_xy(int(x), int(y), size)
+            self._safety.check_current_app(
+                (await session.current_app()).get("package", "")
+            )
             await session.tap(int(x), int(y))
             return {}
 
@@ -238,13 +306,16 @@ class PhoneService:
                 raise PhoneError(
                     E_INPUT_TOO_LONG, f"输入文本超过 {_INPUT_MAX_LENGTH} 字上限"
                 )
+            self._safety.check_current_app(
+                (await session.current_app()).get("package", "")
+            )
             fallback = await session.input_text(text, clear)
-            return {"ascii_fallback": fallback}
+            return {"ime_fallback": fallback}
 
         return await self._do(
             umo,
             "input_text",
-            {"text_len": len(text), "text_head": mask_text(text)},
+            {"text_len": len(text)},  # 输入正文不落任何片段（含验证码类短文本）
             _act,
         )
 
@@ -256,8 +327,16 @@ class PhoneService:
 
         async def _act(session: DeviceSession) -> dict:
             w, h = await session.screen_size()
+            self._safety.check_current_app(
+                (await session.current_app()).get("package", "")
+            )
             cx, cy = w // 2, h // 2
             d = max(100, min(int(distance), 2000)) // 2
+            # 分轴收口（第二轮盲测 F P3-3）：垂直滑动按屏高、水平按屏宽钳制
+            if direction in ("up", "down"):
+                d = max(1, min(d, cy - 1))
+            else:
+                d = max(1, min(d, cx - 1))
 
             def jitter() -> int:
                 return random.randint(-3, 3)  # 拟人坐标抖动
@@ -276,6 +355,9 @@ class PhoneService:
             umo, "swipe", {"direction": direction, "distance": int(distance)}, _act
         )
 
+    # 按键分治（安全模型 v4 第三层）：导航键豁免（脱困通道），确认键必须过门控
+    _NAVIGATION_KEYS = frozenset({"back", "home", "recents"})
+
     async def press_key(self, umo: str, key: str) -> dict:
         if key not in KEY_NAMES:
             return PhoneError(
@@ -283,6 +365,11 @@ class PhoneService:
             ).public_dict("press_key")
 
         async def _act(session: DeviceSession) -> dict:
+            if key not in self._NAVIGATION_KEYS:
+                # enter 在聊天输入框即「发送」、del 可清空内容——必须过前台应用门控
+                self._safety.check_current_app(
+                    (await session.current_app()).get("package", "")
+                )
             await session.press_key(key)
             return {}
 
@@ -291,8 +378,8 @@ class PhoneService:
     async def launch_app(self, umo: str, alias: str) -> dict:
         async def _act(session: DeviceSession) -> dict:
             entry = self._safety.check_app(alias)
-            # 入口门控（v2 安全模型核心）：高危应用默认禁止进入，
-            # 这是唯一不可绕过的拦截位置——进入后再拦 tap 坐标是拦不住的。
+            # 入口门控（双层安全模型第一层）：高危应用默认禁止经 launch 进入；
+            # 即便经桌面图标/深链等路径进入，动作级门控（第二层）仍会拦截其内操作。
             if entry.risk == "high" and not self._cfg().allow_high_risk:
                 raise PhoneError(
                     E_HIGH_RISK_BLOCKED,
@@ -301,7 +388,7 @@ class PhoneService:
                 )
             await session.app_start(entry.package)
             await asyncio.sleep(2)  # 等待启动动画
-            await session.dismiss_popups()  # 首启常见权限/引导弹窗
+            await session.dismiss_popups()  # 首启常见引导弹窗（不含权限授权按钮）
             current = await session.current_app()
             return {
                 "alias": entry.alias,
@@ -312,7 +399,12 @@ class PhoneService:
         return await self._do(umo, "launch_app", {"alias": alias}, _act)
 
     async def wait_element(self, umo: str, text: str, timeout_s: int) -> dict:
-        timeout_s = max(1, min(int(timeout_s), 30))
+        try:
+            timeout_s = max(1, min(int(timeout_s), 30))
+        except (TypeError, ValueError):
+            return PhoneError(
+                E_INVALID_ARGUMENT, "timeout_seconds 不是数字"
+            ).public_dict("wait_element")
 
         async def _act(session: DeviceSession) -> dict:
             found = await session.wait_text(text, timeout_s)
@@ -342,43 +434,46 @@ class PhoneService:
         return self._audit.clear_today()
 
     async def reset_backend(self) -> dict:
-        await self._close_session()
-        cfg = self._cfg()
-        ready = False
-        if cfg.enabled:
-            try:
-                await self._get_session(cfg)
-                ready = True
-            except Exception as exc:
-                logger.warning(f"companion_phone 后端重建失败：{exc}")
+        # 持会话锁防止与在途操作交错；内部走 _get_session_locked 避免锁重入死锁
+        async with self._session_lock:
+            await self._close_session()
+            cfg = self._cfg()
+            ready = False
+            if cfg.enabled:
+                try:
+                    await self._get_session_locked(cfg)
+                    ready = True
+                except Exception as exc:
+                    logger.warning(f"[companion-phone] backend rebuild failed: {exc}")
         return {"status": "ok", "action": "reload", "mode": cfg.mode, "ready": ready}
 
     async def warm_up(self) -> None:
         """AstrBot 就绪后的后台预热：拉起容器并建立连接，失败只记日志。"""
-        cfg = self._cfg()
-        if not cfg.enabled:
-            return
-        if cfg.mode == MODE_REDROID and not cfg.redroid_auto_boot:
-            return
         try:
+            cfg = self._cfg()
+            if not cfg.enabled:
+                return
+            if cfg.mode == MODE_REDROID and not cfg.redroid_auto_boot:
+                return
             await self._get_session(cfg)
         except Exception as exc:
-            logger.warning(f"companion_phone 预热失败：{exc}")
+            logger.warning(f"[companion-phone] warm-up failed: {exc}")
 
     async def close(self, *, stop_device: bool = False) -> None:
         """stop_device=False（默认）：插件卸载/重载不杀容器，重连即恢复。"""
         self._terminated = True
-        session, backend = self._session, self._backend
-        if session is not None:
-            try:
-                await session.close()
-            except Exception:
-                pass
-        if backend is not None:
-            try:
-                await backend.shutdown(stop_device=stop_device)
-            except Exception:
-                pass
-        self._session = None
-        self._backend = None
-        self._mode = None
+        async with self._session_lock:
+            session, backend = self._session, self._backend
+            if session is not None:
+                try:
+                    await session.close()
+                except Exception:
+                    pass
+            if backend is not None:
+                try:
+                    await backend.shutdown(stop_device=stop_device)
+                except Exception:
+                    pass
+            self._session = None
+            self._backend = None
+            self._mode = None

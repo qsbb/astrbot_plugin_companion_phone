@@ -7,11 +7,8 @@ import pytest
 
 from astrbot_plugin_companion_phone.config import PhoneConfig
 from astrbot_plugin_companion_phone.constants import (
-    E_UNKNOWN_ACTION,
-    E_UNKNOWN_PANEL,
     PLUGIN_ID,
 )
-from astrbot_plugin_companion_phone.errors import PhoneError
 from astrbot_plugin_companion_phone.service import PhoneService
 from astrbot_plugin_companion_phone.webui import PhoneWebUI
 
@@ -84,20 +81,23 @@ def test_apps_and_audit_data(webui):
 
 def test_unknown_panel_fail_closed(webui):
     ui, _, _ = webui
-    with pytest.raises(PhoneError) as excinfo:
-        asyncio.run(ui.webui_panel_data("nope"))
-    assert excinfo.value.code == E_UNKNOWN_PANEL
-    with pytest.raises(PhoneError):
-        asyncio.run(ui.webui_panel_action("nope", "x"))
+    # 规范 §5.3：未知 id 以「返回」而非抛异常表达 fail-closed
+    data = asyncio.run(ui.webui_panel_data("nope"))
+    assert data["success"] is False
+    assert data["error_code"] == "UNKNOWN_PANEL"
+    result = asyncio.run(ui.webui_panel_action("nope", "x"))
+    assert result["success"] is False
+    assert result["error_code"] == "UNKNOWN_PANEL"
 
 
 def test_unknown_action_fail_closed(webui):
     ui, _, _ = webui
-    with pytest.raises(PhoneError) as excinfo:
-        asyncio.run(ui.webui_panel_action("phone_apps", "reload"))  # apps 无动作
-    assert excinfo.value.code == E_UNKNOWN_ACTION
-    with pytest.raises(PhoneError):
-        asyncio.run(ui.webui_panel_action("phone_status", "destroy"))
+    result = asyncio.run(ui.webui_panel_action("phone_apps", "reload"))  # apps 无动作
+    assert result["success"] is False
+    assert result["error_code"] == "UNKNOWN_ACTION"
+    result = asyncio.run(ui.webui_panel_action("phone_status", "destroy"))
+    assert result["success"] is False
+    assert result["error_code"] == "UNKNOWN_ACTION"
 
 
 def test_pause_resume_and_reload_actions(webui):

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 
-from ..constants import E_ADB_CONNECT_FAILED, E_MODE_INVALID, MODE_REAL
+from ..constants import E_ADB_CONNECT_FAILED, MODE_REAL
 from ..errors import BackendError
 from .base import BackendState, DeviceBackend
+
+_ADB_TIMEOUT_SECONDS = 30.0  # 规范 §3.2：外部 IO 必须有超时上限
 
 
 class RealDeviceBackend(DeviceBackend):
@@ -20,42 +22,55 @@ class RealDeviceBackend(DeviceBackend):
 
         return adbutils.AdbClient(host="127.0.0.1", port=5037)
 
+    async def _adb(self, fn, *args, **kwargs):
+        """adbutils 同步调用统一 30s 超时，防止挂起拖死会话。"""
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(fn, *args, **kwargs), timeout=_ADB_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            raise BackendError(
+                E_ADB_CONNECT_FAILED, f"adb 调用超时（{_ADB_TIMEOUT_SECONDS:.0f}s）"
+            ) from None
+
     async def ensure_ready(self) -> BackendState:
         cfg = self._cfg
-        client = await asyncio.to_thread(self._client)
+        client = await self._adb(self._client)
         if cfg.real_wireless_addr:
             addr = cfg.real_wireless_addr
             try:
-                await asyncio.to_thread(client.connect, addr)
+                result = await self._adb(client.connect, addr)
+            except BackendError:
+                raise
             except Exception as exc:
                 raise BackendError(
                     E_ADB_CONNECT_FAILED, f"无线 ADB 连接失败：{exc}"
                 ) from exc
+            # adbutils 对 "unable to connect" 不抛异常而是返回字符串——显式检查
+            text = str(result)
+            if any(marker in text.lower() for marker in ("unable", "failed", "cannot")):
+                raise BackendError(E_ADB_CONNECT_FAILED, f"无线 ADB 连接失败：{text}")
             self._serial = addr
         else:
-            devices = await asyncio.to_thread(client.device_list)
-            if cfg.real_serial:
-                serials = [d.serial for d in devices]
-                if cfg.real_serial not in serials:
-                    raise BackendError(
-                        E_ADB_CONNECT_FAILED,
-                        f"未找到 USB 设备 {cfg.real_serial}（用 adb devices 检查）",
-                    )
-                self._serial = cfg.real_serial
-            elif len(devices) == 1:
-                self._serial = devices[0].serial
-            elif not devices:
-                raise BackendError(E_ADB_CONNECT_FAILED, "没有检测到任何 ADB 设备")
-            else:
+            # 配置校验保证真机模式下 real_serial 必填（无自动选择分支）
+            devices = await self._adb(client.device_list)
+            serials = [d.serial for d in devices]
+            if cfg.real_serial not in serials:
                 raise BackendError(
-                    E_MODE_INVALID, "检测到多台设备，请在配置中明确 REAL_SERIAL"
+                    E_ADB_CONNECT_FAILED,
+                    f"未找到 USB 设备 {cfg.real_serial}（用 adb devices 检查）",
                 )
+            self._serial = cfg.real_serial
         await self._probe(client)
         return BackendState(ready=True, adb_serial=self._serial, detail=self.describe())
 
     async def _probe(self, client) -> None:
         try:
-            out = await asyncio.to_thread(client.shell, self._serial, "echo ok")
+            # AdbClient.shell 已弃用（adbutils 0.15+），用 device(serial).shell
+            device = await self._adb(client.device, self._serial)
+            out = await self._adb(device.shell, "echo ok")
+        except BackendError:
+            raise
         except Exception as exc:
             raise BackendError(E_ADB_CONNECT_FAILED, f"设备探活失败：{exc}") from exc
         if "ok" not in str(out):
@@ -65,8 +80,9 @@ class RealDeviceBackend(DeviceBackend):
         if not self._serial:
             return BackendState(ready=False, adb_serial="", detail={"mode": MODE_REAL})
         try:
-            client = await asyncio.to_thread(self._client)
-            out = await asyncio.to_thread(client.shell, self._serial, "echo ok")
+            client = await self._adb(self._client)
+            device = await self._adb(client.device, self._serial)
+            out = await self._adb(device.shell, "echo ok")
             ready = "ok" in str(out)
         except Exception:
             ready = False

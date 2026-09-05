@@ -10,12 +10,6 @@ from typing import Any
 from .log import logger
 
 
-def mask_text(text: str, head: int = 12) -> str:
-    """输入类文本只落长度与前缀，正文不进审计。"""
-    text = text.strip()
-    return text[:head] + ("***" if len(text) > head else "")
-
-
 def _hash_umo(umo: str) -> str:
     if not umo:
         return ""
@@ -25,7 +19,9 @@ def _hash_umo(umo: str) -> str:
 class AuditLog:
     """JSONL 追加审计：data/plugin_data/<plugin>/audit/YYYY-MM-DD.jsonl
 
-    隐私约定：params 由调用方（service）预先掩码；写入失败只 warning，不影响主流程。
+    隐私约定：params 由调用方（service）预先脱敏——input_text 只记长度，
+    不落任何正文片段；写入失败只 warning，不影响主流程。
+    日期文件名统一 UTC（规范 §6），写入/读取/清空三方一致。
     """
 
     def __init__(self, base_dir: Path) -> None:
@@ -43,7 +39,7 @@ class AuditLog:
         error_code: str = "",
         elapsed_ms: int = 0,
     ) -> None:
-        now = datetime.now(UTC)  # 规范 §6：时区一律 UTC 存储，展示层再本地化
+        now = datetime.now(UTC)
         entry = {
             "ts": now.isoformat(timespec="seconds"),
             "umo": _hash_umo(umo),
@@ -54,21 +50,25 @@ class AuditLog:
             "error_code": error_code,
             "elapsed_ms": elapsed_ms,
         }
-        line = json.dumps(entry, ensure_ascii=False, separators=(",", ":"))
-        path = self._dir / f"{now:%Y-%m-%d}.jsonl"
         try:
+            line = json.dumps(entry, ensure_ascii=False, separators=(",", ":"))
+            path = self._dir / f"{now:%Y-%m-%d}.jsonl"
             with self._lock:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 with path.open("a", encoding="utf-8") as f:
                     f.write(line + "\n")
-        except OSError:
-            logger.warning("companion_phone 审计写入失败", exc_info=True)
+        except (OSError, TypeError, ValueError):
+            logger.warning(
+                "[companion-phone] failed to write audit record", exc_info=True
+            )
 
     def clear_today(self) -> bool:
-        """清空当日审计文件（series.webui 面板动作）；无文件返回 False。"""
+        """清空当日审计文件（series.webui 面板动作）；文件不存在返回 False。"""
         path = self._dir / f"{datetime.now(UTC):%Y-%m-%d}.jsonl"
+        if not path.exists():
+            return False
         try:
-            path.unlink(missing_ok=True)
+            path.unlink()
             return True
         except OSError:
             logger.warning(
@@ -77,8 +77,10 @@ class AuditLog:
             return False
 
     def recent(self, limit: int = 50) -> list[dict]:
-        """读当天文件尾部记录（审计查询用，脱敏已由写入端保证）。"""
-        path = self._dir / f"{datetime.now():%Y-%m-%d}.jsonl"
+        """读当天文件尾部记录；与写入端统一 UTC 日期命名。"""
+        if limit <= 0:
+            return []  # 防御 lines[-0:] 切片陷阱
+        path = self._dir / f"{datetime.now(UTC):%Y-%m-%d}.jsonl"
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
         except OSError:

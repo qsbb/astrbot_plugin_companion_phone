@@ -27,23 +27,15 @@ CONTRACT_KEYS = {
 }
 
 
-def make_contract() -> dict:
-    return {
-        "name": "series.diagnostics",
-        "version": "1.0",
-        "series_id": "ningxin_suxi",
-        "plugin_id": PLUGIN_ID,
-        "plugin_name": PLUGIN_NAME,
-        "capabilities": ("read", "clear", "read_events", "clear_events"),
-        "storage": "memory_only",
-        "astrbot_log_propagation": False,
-    }
-
-
 def test_contract_shape():
-    contract = make_contract()
+    # 调用被测的真实实现（而非测试自造 dict），防止实现漂移时测试仍然恒真（F-19）
+    contract = sd.diagnostic_log_contract()
     assert set(contract) == CONTRACT_KEYS
+    assert contract["name"] == "series.diagnostics"
+    assert contract["version"] == "1.0"
     assert contract["series_id"] == "ningxin_suxi"
+    assert contract["plugin_id"] == PLUGIN_ID
+    assert contract["plugin_name"] == PLUGIN_NAME
     assert contract["storage"] == "memory_only"
     assert contract["astrbot_log_propagation"] is False
 
@@ -97,11 +89,16 @@ def test_ring_buffer_limit():
     assert seqs == list(range(seqs[0], seqs[0] + 1000))
 
 
-def test_clear_resets_state():
+def test_clear_keeps_seq_monotonic():
+    """回归锚：clear 后 seq 持续单调，聚合端旧游标不会吞掉新事件（F-20）。"""
     sd.diagnostic_clear()
-    sd.diagnostic_event("x", "y")
+    sd.diagnostic_event("before", "清空前")
+    last_seq = sd.diagnostic_events(0, 200)["events"][-1]["seq"]
     sd.diagnostic_clear()
+    sd.diagnostic_event("after", "清空后")
     result = sd.diagnostic_events(0, 200)
-    assert result["events"] == []
-    assert result["dropped_before"] == 0
-    assert result["stream_id"]  # stream_id 保持，表示进程未重启
+    assert len(result["events"]) == 1
+    assert result["events"][0]["seq"] > last_seq  # seq 不回绕
+    result2 = sd.diagnostic_events(last_seq, 200)
+    assert len(result2["events"]) == 1  # 旧游标依然能读到清空后的新事件
+    assert result2["stream_id"]  # stream_id 保持，表示进程未重启

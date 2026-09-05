@@ -66,11 +66,40 @@ class SafetyGate:
     def check_tap_xy(self, x: int, y: int, size) -> None:
         w, h = int(size[0]), int(size[1])
         if w <= 0 or h <= 0:
-            return
+            # fail-closed：读不到屏幕尺寸时拒绝点按，而不是放行任意坐标
+            raise SafetyError(
+                E_OUT_OF_BOUNDS, "无法读取屏幕尺寸，动作被拦截；请重新调用 screen"
+            )
         if not (0 <= x < w and 0 <= y < h):
             raise SafetyError(
                 E_OUT_OF_BOUNDS, f"坐标 ({x},{y}) 超出屏幕 {w}x{h}，请重新读屏"
             )
+
+    # ---------- 动作级前台应用门控（安全模型 v3 第二层） ----------
+    def check_current_app(self, package: str) -> AppEntry | None:
+        """对 tap/input_text/swipe/enter 等无文本动作的前台应用检查。
+
+        白名单即操作边界（默认拒绝）：
+        - 白名单内 risk=high 且未 ALLOW_HIGH_RISK → 拦截；
+        - 白名单内 risk=low → 放行；
+        - 白名单外（含空包名）→ 一律拦截：桌面/系统应用之外的任何非白名单前台
+          （短信、银行、权限对话框等）都没有已授予的操作权；
+          错误信息指引管理员将其加入 APP_WHITELIST。
+        """
+        entry = self.app_entry_for_package(package)
+        if entry is not None:
+            if entry.risk == "high" and not self._cfg.allow_high_risk:
+                raise SafetyError(
+                    E_HIGH_RISK_BLOCKED,
+                    f"当前前台应用 {entry.alias} 是高风险应用，动作被安全策略拦截；"
+                    "如需放行请管理员开启 ALLOW_HIGH_RISK",
+                )
+            return entry
+        raise SafetyError(
+            E_HIGH_RISK_BLOCKED,
+            f"前台应用 {package or '（未知）'} 不在白名单，动作被安全策略拦截；"
+            "如需操作请管理员将其加入 APP_WHITELIST",
+        )
 
     # ---------- 预算 ----------
     def budget_reset(self, umo: str) -> None:
