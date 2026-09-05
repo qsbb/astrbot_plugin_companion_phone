@@ -1,0 +1,15 @@
+name: astrbot_plugin_companion_phone
+display_name: 凝心溯溪-通
+short_desc: 心夏的手机：真机或模拟器双模式的安卓操作
+desc: >
+  凝心溯溪系列通模块：真机或模拟器双模式的安卓手机操作，
+  读屏、点按、输入、滑动、启动应用；含白名单、高危入口门控、动作预算与审计。
+version: 0.0.1
+author: 凌溪
+repo: https://github.com/qsbb/astrbot_plugin_companion_phone
+astrbot_version: ">=4.16,<5"
+tags:
+  - Function Tool
+  - ADB
+  - Redroid
+  - 凝心溯溪

@@ -1,0 +1,160 @@
+{
+  "ENABLED": {
+    "type": "bool",
+    "description": "启用手机插件；首次安装默认关闭，模式配置并测试通过后再开启",
+    "default": false
+  },
+  "PAUSE_ALL": {
+    "type": "bool",
+    "description": "一键暂停全部手机动作（保留连接与配置，仅拒绝工具执行）",
+    "default": false
+  },
+  "MODE": {
+    "type": "string",
+    "description": "设备模式：redroid=服务器上的安卓模拟器容器；real=USB/无线连接的真机",
+    "options": ["redroid", "real"],
+    "default": "redroid",
+    "hint": "切换模式后需执行 /phone reload 或在 WebUI 重载插件生效"
+  },
+
+  "REDROID_IMAGE": {
+    "type": "string",
+    "description": "Redroid Docker 镜像；跑微信/QQ 等 ARM 应用需选带 native bridge 的 Android 12 x86_64 变体，具体 tag 以 redroid 官方 README 为准",
+    "default": "redroid/redroid:12.0.0_64-nativebridge"
+  },
+  "REDROID_CONTAINER": {
+    "type": "string",
+    "description": "容器名",
+    "default": "companion-phone"
+  },
+  "REDROID_ADB_PORT": {
+    "type": "int",
+    "description": "宿主机映射给容器 5555 端口的 ADB 端口（只绑定 127.0.0.1）",
+    "default": 26655,
+    "minimum": 1024,
+    "maximum": 65535
+  },
+  "REDROID_DATA_PATH": {
+    "type": "string",
+    "description": "容器数据目录（宿主机绝对路径）；安卓系统数据、App 与登录态都持久化在这里",
+    "default": "/var/lib/companion-phone"
+  },
+  "REDROID_EXTRA_ARGS": {
+    "type": "list",
+    "description": "附加 docker run 参数（如 gpu 加速、内存限制）",
+    "default": []
+  },
+  "REDROID_AUTO_BOOT": {
+    "type": "bool",
+    "description": "插件启动时自动拉起容器（若未运行）",
+    "default": true
+  },
+
+  "REAL_SERIAL": {
+    "type": "string",
+    "description": "真机模式：USB 设备 serial（adb devices 可查）；留空且配置了 REAL_WIRELESS_ADDR 时走无线",
+    "default": ""
+  },
+  "REAL_WIRELESS_ADDR": {
+    "type": "string",
+    "description": "真机模式：无线 ADB 地址 host:port（需先在手机上完成无线调试配对）",
+    "default": ""
+  },
+
+  "APP_WHITELIST": {
+    "type": "template_list",
+    "description": "允许操作的应用白名单；只有别名会暴露给模型，包名不会",
+    "templates": {
+      "app": {
+        "name": "应用",
+        "items": {
+          "alias": {
+            "description": "应用别名（暴露给模型的名称，如 wechat）",
+            "type": "string",
+            "default": ""
+          },
+          "package": {
+            "description": "安卓包名（如 com.tencent.mm）",
+            "type": "string",
+            "default": ""
+          },
+          "risk": {
+            "description": "风险等级：low=常规浏览；high=通讯/支付类，操作默认需高危放行",
+            "type": "string",
+            "options": ["low", "high"],
+            "default": "low"
+          }
+        }
+      }
+    }
+  },
+
+  "ACTION_MAX_PER_TURN": {
+    "type": "int",
+    "description": "单轮对话内允许的最大设备动作数（点按/输入/滑动/按键计数），防失控",
+    "default": 8,
+    "minimum": 1,
+    "maximum": 50
+  },
+  "ALLOW_HIGH_RISK": {
+    "type": "bool",
+    "description": "放行高危动作（通讯/支付类 App 内操作、命中高危关键词的点按）。默认关闭时此类动作被拒绝并提示",
+    "default": false,
+    "obvious_hint": true
+  },
+  "HIGH_RISK_KEYWORDS": {
+    "type": "list",
+    "description": "点按目标文本命中任一关键词即视为高危动作",
+    "default": ["发送", "删除", "支付", "转账", "购买", "付款", "确认订单", "注销"]
+  },
+
+  "TASK_MAX_STEPS": {
+    "type": "int",
+    "description": "/phone task 多步任务的最大工具调用步数",
+    "default": 12,
+    "minimum": 1,
+    "maximum": 60
+  },
+  "TASK_TOOL_TIMEOUT": {
+    "type": "int",
+    "description": "单次工具调用超时秒数（tool_loop_agent 的 tool_call_timeout）",
+    "default": 60,
+    "minimum": 5,
+    "maximum": 300
+  },
+
+  "HUMANIZE_DELAY": {
+    "type": "bool",
+    "description": "动作间随机拟人延时",
+    "default": true
+  },
+  "DELAY_MS_MIN": {
+    "type": "int",
+    "description": "拟人延时的随机区间下限（毫秒）",
+    "default": 300,
+    "minimum": 0,
+    "maximum": 10000
+  },
+  "DELAY_MS_MAX": {
+    "type": "int",
+    "description": "拟人延时的随机区间上限（毫秒）",
+    "default": 900,
+    "minimum": 0,
+    "maximum": 30000
+  },
+
+  "UI_TREE_MAX_NODES": {
+    "type": "int",
+    "description": "屏幕摘要返回给模型的最大控件数",
+    "default": 60,
+    "minimum": 10,
+    "maximum": 200
+  },
+  "SCREENSHOT_KEEP": {
+    "type": "int",
+    "description": "本地保留的最近截图张数（超出自动轮转删除）",
+    "default": 50,
+    "minimum": 1,
+    "maximum": 500
+  }
+}
