@@ -22,6 +22,10 @@
    `python scripts/smoke_check.py`——逐项检查 Python 版本、依赖、配置校验、
    docker/容器/引导（redroid）或真机探活、u2 读屏截图、插件导入与契约形状，
    输出 PASS/FAIL/SKIP 报告；`--mode`、`--serial`、`--config` 可覆盖。
+6. 深度验证（可选，AstrBot 环境内运行）：
+   `python scripts/verify_real_host.py`——在真实宿主上验证 9 工具 schema 序列化、
+   R2 视觉兜底的 mcp CallToolResult 链路与会话门控行为（0.0.4 已在
+   AstrBot 4.27.5 + mcp + Pillow 全部通过）。
 
 ## 管理指令（管理员）
 
