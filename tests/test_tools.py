@@ -11,12 +11,24 @@ class StubService:
     """行为镜像 PhoneService 的最小替身；check_session_allowed 模拟 private 策略。"""
 
     scope = "private"
+    vision = False
 
     async def status(self):
         return {"status": "ok", "action": "status"}
 
     async def screen(self, umo=""):
-        return {"status": "ok", "action": "screen", "nodes": []}
+        return {
+            "status": "ok",
+            "action": "screen",
+            "nodes": [],
+            "screenshot_path": "/tmp/shot.png",
+        }
+
+    def screen_vision_enabled(self):
+        return self.vision
+
+    def load_screenshot(self, path):
+        return b"fake-jpeg-bytes"
 
     async def tap(self, umo, x, y):
         return {"status": "ok", "action": "tap", "xy": [x, y]}
@@ -116,6 +128,37 @@ def test_screen_passes_umo():
     tools = {t.name: t for t in create_device_tools(Spy())}
     asyncio.run(tools["companion_phone_screen"].call(Ctx(_Ev())))
     assert seen["umo"] == "test:private:u1"
+
+
+def test_screen_vision_disabled_returns_json_without_path():
+    """R2 回归锚：视觉关闭时纯 JSON，且截图路径不进入模型可见文本。"""
+    tools = make_tools()
+    raw = asyncio.run(tools["companion_phone_screen"].call(Ctx(_Ev())))
+    assert isinstance(raw, str)
+    payload = json.loads(raw)
+    assert payload["status"] == "ok"
+    assert "screenshot_path" not in raw
+
+
+def test_screen_vision_enabled_returns_mcp_image():
+    """R2 回归锚：视觉开启时返回 CallToolResult，文本+图像双内容，路径不入文本。"""
+    import base64
+
+    from mcp.types import CallToolResult
+
+    class VisionService(StubService):
+        vision = True
+
+    tools = {t.name: t for t in create_device_tools(VisionService())}
+    result = asyncio.run(tools["companion_phone_screen"].call(Ctx(_Ev())))
+    assert isinstance(result, CallToolResult)
+    assert len(result.content) == 2
+    text_part, image_part = result.content
+    payload = json.loads(text_part.text)
+    assert payload["status"] == "ok"
+    assert "screenshot_path" not in text_part.text
+    assert image_part.mimeType == "image/jpeg"
+    assert base64.b64decode(image_part.data) == b"fake-jpeg-bytes"
 
 
 def test_session_gate_private_mode():

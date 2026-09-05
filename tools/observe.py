@@ -8,7 +8,7 @@ from astrbot.core.agent.tool import FunctionTool, ToolExecResult
 from astrbot.core.astr_agent_context import AstrAgentContext
 
 from ..constants import TOOL_SCREEN, TOOL_STATUS
-from .base import _ToolMixin, _umo
+from .base import _ToolMixin, _json, _umo
 
 
 @dataclass
@@ -37,7 +37,7 @@ class StatusTool(_ToolMixin, FunctionTool[AstrAgentContext]):
 
 @dataclass
 class ScreenTool(_ToolMixin, FunctionTool[AstrAgentContext]):
-    """只读：模型的“眼睛”。"""
+    """只读：模型的“眼睛”。R2 视觉兜底：SCREEN_VISION 开启时附带截图图像内容。"""
 
     name: str = TOOL_SCREEN
     description: str = (
@@ -57,4 +57,32 @@ class ScreenTool(_ToolMixin, FunctionTool[AstrAgentContext]):
         self, context: ContextWrapper[AstrAgentContext], **kwargs
     ) -> ToolExecResult:
         umo = _umo(context)
-        return await self._call(context, "screen", lambda: self.service.screen(umo))
+
+        def formatter(payload: dict) -> ToolExecResult:
+            path = payload.pop("screenshot_path", None)
+            if not path or not self.service.screen_vision_enabled():
+                return _json(payload)  # 路径永不进入模型可见文本
+            data = self.service.load_screenshot(path)
+            if not data:
+                return _json(payload)
+            try:
+                import base64
+
+                from mcp.types import CallToolResult, ImageContent, TextContent
+
+                return CallToolResult(
+                    content=[
+                        TextContent(type="text", text=_json(payload)),
+                        ImageContent(
+                            type="image",
+                            data=base64.b64encode(data).decode("ascii"),
+                            mimeType="image/jpeg",
+                        ),
+                    ]
+                )
+            except ImportError:
+                return _json(payload)  # 宿主无 mcp：降级为纯文本
+
+        return await self._call(
+            context, "screen", lambda: self.service.screen(umo), formatter
+        )

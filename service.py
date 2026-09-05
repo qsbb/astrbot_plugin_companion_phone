@@ -241,6 +241,32 @@ class PhoneService:
                 pass
         return payload
 
+    def screen_vision_enabled(self) -> bool:
+        """R2 视觉兜底开关（SCREEN_VISION，默认关闭）。"""
+        return self._cfg().screen_vision
+
+    def load_screenshot(self, path: str | Path) -> bytes | None:
+        """读取并压缩截图（≤720px JPEG；Pillow 不可用时回退原始 PNG）。"""
+        try:
+            data = Path(path).read_bytes()
+        except OSError:
+            return None
+        try:
+            import io
+
+            from PIL import Image
+
+            img = Image.open(io.BytesIO(data)).convert("RGB")
+            w, h = img.size
+            max_w = 720
+            if w > max_w:
+                img = img.resize((max_w, max(1, int(h * max_w / w))))
+            buf = io.BytesIO()
+            img.save(buf, "JPEG", quality=70)
+            return buf.getvalue()
+        except Exception:
+            return data
+
     async def screen(self, umo: str = "") -> dict:
         started = time.monotonic()
         cfg = self._ensure_active()
@@ -255,8 +281,9 @@ class PhoneService:
                 popups = await session.dismiss_popups()
             size = await session.screen_size()
             nodes = await session.ui_tree(cfg.ui_tree_max_nodes)
-            # 截图仅存盘供管理员（/phone shot）与排障；服务器路径不进入模型上下文
-            await self._take_screenshot(session, cfg)
+            # 截图存盘供管理员（/phone shot）、审计与 R2 视觉兜底；
+            # 路径由工具层消费，永远不进入模型可见文本
+            shot = await self._take_screenshot(session, cfg)
         except PhoneError as exc:
             await self._audit_async("", cfg, "screen", {}, "error", exc.code, started)
             return exc.public_dict("screen")
@@ -275,6 +302,7 @@ class PhoneService:
             "current_app": current,
             "screen_size": size,
             "nodes": nodes,
+            "screenshot_path": str(shot),
         }
 
     # ---------- 操作 ----------

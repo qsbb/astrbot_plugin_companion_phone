@@ -4,7 +4,7 @@ short_desc: 凝心溯溪系列通模块：真机/模拟器双模式的安卓手�
 desc: >
   凝心溯溪系列通模块：真机或模拟器双模式的安卓手机操作，
   读屏、点按、输入、滑动、启动应用；含白名单、高危入口与动作级双层门控、动作预算与审计。
-version: 0.0.3
+version: 0.0.4
 author: 凌溪
 repo: https://github.com/qsbb/astrbot_plugin_companion_phone
 astrbot_version: ">=4.16,<5"

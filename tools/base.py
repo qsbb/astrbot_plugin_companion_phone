@@ -40,17 +40,14 @@ class _ToolMixin:
         context: Any,
         action: str,
         coro_factory: Callable[[], Awaitable[Any]],
-    ) -> str:
+        formatter: Callable[[Any], Any] | None = None,
+    ) -> Any:
         guard = self._session_guard(context)
         if guard is not None:
             return guard
-        return await self._run(action, coro_factory)
-
-    async def _run(
-        self, action: str, coro_factory: Callable[[], Awaitable[Any]]
-    ) -> str:
         try:
-            return _json(await coro_factory())
+            payload = await coro_factory()
+            return formatter(payload) if formatter else _json(payload)
         except PhoneError as exc:
             return _json(exc.public_dict(action))
         except (TypeError, ValueError):
@@ -62,6 +59,11 @@ class _ToolMixin:
             return _json(
                 PhoneError(E_INTERNAL, "内部错误，请管理员查看日志").public_dict(action)
             )
+
+    async def _run(
+        self, action: str, coro_factory: Callable[[], Awaitable[Any]]
+    ) -> str:
+        return await self._call(None, action, coro_factory)
 
 
 def _json(payload: Any) -> str:

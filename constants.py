@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 PLUGIN_ID = "astrbot_plugin_companion_phone"
-PLUGIN_VERSION = "0.0.3"  # 唯一事实源为 metadata.yaml 的 version；二者由测试断言一致
+PLUGIN_VERSION = "0.0.4"  # 唯一事实源为 metadata.yaml 的 version；二者由测试断言一致
 __version__ = PLUGIN_VERSION  # 规范 §10：与 metadata.yaml version 同步
 PLUGIN_NAME = "通"  # 凝心溯溪系列单字，用户已确认（2026-09-05）
 PLUGIN_DISPLAY_NAME = "凝心溯溪-通"

@@ -174,5 +174,11 @@
     "type": "list",
     "description": "TOOL_CHAT_SCOPE=allowlist 时生效：允许使用手机工具的 unified_msg_origin 列表",
     "default": []
+  },
+
+  "SCREEN_VISION": {
+    "type": "bool",
+    "description": "视觉兜底：screen 工具把截图（压缩后 ≤720px JPEG）以图像内容回传给多模态模型；显著增加 token 成本，默认关闭",
+    "default": false
   }
 }

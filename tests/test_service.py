@@ -11,7 +11,8 @@ def test_screen_ok(service):
     assert result["status"] == "ok"
     assert result["screen_size"] == [1080, 2400]
     assert len(result["nodes"]) == 2
-    assert "screenshot" not in result  # F-17 回归锚：截图路径不回传模型
+    # 截图存盘，路径为内部字段：由工具层消费（R2 视觉/排障），不进模型文本
+    assert result["screenshot_path"].endswith(".png")
 
 
 def test_tap_blocked_in_high_risk_foreground(service):

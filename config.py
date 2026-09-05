@@ -50,6 +50,7 @@ class PhoneConfig:
     screenshot_keep: int = 50
     tool_chat_scope: str = "private"
     tool_allowlist: tuple[str, ...] = ()
+    screen_vision: bool = False
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any]) -> "PhoneConfig":
@@ -129,6 +130,7 @@ class PhoneConfig:
             screenshot_keep=_bounded_int(data.get("SCREENSHOT_KEEP"), 50, 1),
             tool_chat_scope=tool_scope,
             tool_allowlist=_str_tuple(data.get("TOOL_ALLOWLIST")),
+            screen_vision=bool(data.get("SCREEN_VISION", False)),
         )
 
     def app_by_alias(self, alias: str) -> AppEntry | None:
