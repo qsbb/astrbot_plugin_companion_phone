@@ -13,6 +13,9 @@ from .errors import SafetyError
 
 # 常规对话动作预算的滑动窗口：不依赖“新一轮”信号，近似单轮语义
 _WINDOW_SECONDS = 300.0
+# 预算字典的键数上界（第二轮盲测 G P3-7）：scope=all 的公开 bot 每个 umo 一个键，
+# 超限按插入序淘汰最旧——内存有界，代价是极端情况下老会话的窗口计数被重置
+_MAX_BUDGET_KEYS = 256
 
 
 class SafetyGate:
@@ -125,6 +128,8 @@ class SafetyGate:
             )
         recent.append(now)
         self._window[umo] = recent
+        while len(self._window) > _MAX_BUDGET_KEYS:
+            self._window.pop(next(iter(self._window)))
 
     def task_budget_start(self, umo: str, limit: int) -> None:
         self._task_budget[umo] = max(1, int(limit))

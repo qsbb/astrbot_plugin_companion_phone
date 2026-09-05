@@ -127,3 +127,13 @@ def test_task_budget_independent():
     gate.budget_consume("umo1")  # 回到窗口预算
     with pytest.raises(SafetyError):
         gate.budget_consume("umo1")  # 窗口预算（上限 1）也已用尽
+
+
+def test_budget_window_bounded():
+    """回归锚（G P3-7）：预算字典键数有上界，不随会话数无限增长。"""
+    from astrbot_plugin_companion_phone.safety import _MAX_BUDGET_KEYS
+
+    gate = make_gate()
+    for i in range(_MAX_BUDGET_KEYS + 50):
+        gate.budget_consume(f"umo-{i}")
+    assert len(gate._window) <= _MAX_BUDGET_KEYS
