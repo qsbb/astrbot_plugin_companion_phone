@@ -18,6 +18,10 @@
 2. AstrBot WebUI 安装本插件（或放入 `data/plugins/`）。
 3. 配置 `MODE` 与对应参数，添加 `APP_WHITELIST`（alias/package/risk），`ENABLED=true`。
 4. 验证：`/phone status` → `/phone shot` → `/phone task 打开browser搜索天气`。
+5. 联调预检（可选，装插件前/后都可在服务器上运行）：
+   `python scripts/smoke_check.py`——逐项检查 Python 版本、依赖、配置校验、
+   docker/容器/引导（redroid）或真机探活、u2 读屏截图、插件导入与契约形状，
+   输出 PASS/FAIL/SKIP 报告；`--mode`、`--serial`、`--config` 可覆盖。
 
 ## 管理指令（管理员）
 
