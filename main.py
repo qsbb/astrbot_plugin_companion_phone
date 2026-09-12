@@ -72,6 +72,21 @@ class CompanionPhonePlugin(Star):
     def _cfg(self) -> PhoneConfig:
         return PhoneConfig.from_config(self.config)
 
+    # ---------- series.module@1.0 模块清单 ----------
+    def series_module_contract(self) -> dict[str, Any]:
+        """向核声明模块身份、能力与面板，供统一外壳发现。"""
+        return {
+            "name": "series.module@1.0",
+            "version": "1.0",
+            "series_id": "ningxin_suxi",
+            "plugin_id": PLUGIN_ID,
+            "display_name": "通",
+            "role": "phone",
+            "standalone": {"available": False, "entry": "", "pages": []},
+            "capabilities": ["webui", "diagnostics"],
+            "panels": ["phone_status", "phone_apps", "phone_audit"],
+        }
+
     # ---------- series.diagnostics@1.0（规范 §5.1 必选契约） ----------
     def diagnostic_log_contract(self) -> dict[str, Any]:
         return diagnostic_log_contract()
